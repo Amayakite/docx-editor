@@ -122,6 +122,13 @@ export interface SpanLinkRecord {
 
 /** A run of text on one line sharing identical resolved formatting. */
 export interface StyleSpanRecord {
+  /**
+   * Horizontal ink displacement in points from box.x, before drawing the glyphs.
+   * CJK opening punctuation removes its left side bearing; its advance and caret
+   * boundaries remain box-based. Zero marks trailing-bearing compression with no
+   * ink displacement. Exporters must apply this offset to the ink origin.
+   */
+  readonly glyphOffsetPt?: number;
   readonly range: SourceRange;
   readonly text: string;
   /** The run's authored properties, retained as evidence. */

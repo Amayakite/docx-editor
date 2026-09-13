@@ -4004,6 +4004,7 @@ export interface StyleSpanRecord {
     readonly equation?: EquationSpanRecord;
     readonly fieldAtom?: FieldAtomMarker;
     readonly fontSlot?: FontSlot;
+    readonly glyphOffsetPt?: number;
     readonly lineEndWhitespace?: true;
     readonly link?: SpanLinkRecord;
     readonly noteNav?: {
