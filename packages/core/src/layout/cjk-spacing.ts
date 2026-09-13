@@ -34,6 +34,9 @@ const compressible = (piece: FieldAwarePiece): boolean =>
   !piece.projected &&
   // Outlined ink extends into the nominal bearing; keep its complete advance.
   !piece.style.textOutline &&
+  // Mirroring changes which glyph side owns the bearing. Keep RTL ink uncompressed
+  // until compression can resolve the mirrored glyph's physical bearings.
+  piece.style.shaping?.direction !== 'rtl' &&
   // Transparent selection ink suppresses native decorations. Keep decorated and
   // tracked text on the native paint path, including hidden revision presentations.
   !piece.style.underline &&

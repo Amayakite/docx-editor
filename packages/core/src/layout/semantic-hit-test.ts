@@ -1,3 +1,5 @@
+import { bidiPrefixWidth } from './shaped-caret-advances.ts';
+import { nearestBidiSpan } from './rtl-paragraph.ts';
 // Pointer hit testing in MODEL space, over semantic layout records.
 //
 // A pointer lands somewhere on a sheet; this answers which text position the person meant.
@@ -25,7 +27,7 @@ import { PAGE_BREAK_CHAR } from '../store/package/hard-break.ts';
 import { graphemeBoundaryEpoch, segmentGraphemes } from './grapheme.ts';
 import { isCjk } from './cjk-paragraph-breaks.ts';
 import { lastCodePointOf } from './cjk-line-break.ts';
-import { lineSegments, type LineSegment } from './line-segments.ts';
+import { lineForSegment, lineSegments, type LineSegment } from './line-segments.ts';
 import { baselineShiftPtOf, measureDisplayText } from './run-style.ts';
 import { styleForFontSlot } from './script-itemization.ts';
 import type { CaretGeometry, SemanticPosition } from './semantic-interaction.ts';
@@ -685,6 +687,11 @@ function drawingHitIdentity(drawing: InlineDrawingRecord): SemanticHitDrawing {
  */
 function segmentAtX(line: LineRecord, x: number): LineSegment {
   const segments = lineSegments(line);
+  const bidiSpan = nearestBidiSpan(line.spans, x);
+  if (bidiSpan) {
+    const owner = segments.find((segment) => segment.paragraphId === bidiSpan.range.paragraphId);
+    if (owner) return owner;
+  }
   let found = segments[0]!;
   for (const segment of segments) {
     const first = segment.spans[0];
@@ -768,6 +775,23 @@ function offsetOnLine(line: LineRecord, x: number, y: number, context: HitContex
     return { offset: line.range.start, x: line.contentX, withinSpan: false };
   }
 
+  const bidiSpan = nearestBidiSpan(spans, x);
+  if (bidiSpan) {
+    const candidate = offsetWithinSpan(
+      bidiSpan,
+      Math.max(bidiSpan.box.x, Math.min(x, bidiSpan.box.x + bidiSpan.box.width)),
+      context
+    );
+    const segment = lineSegments(line).find(
+      (entry) => entry.paragraphId === bidiSpan.range.paragraphId
+    );
+    // Merged display lines carry independent offset spaces. Trim only this member's tail.
+    const ownedLine = lineForSegment(line, segment);
+    const offset = Math.min(candidate.offset, lineEndOffset(context.layout, ownedLine));
+    return offset === candidate.offset
+      ? candidate
+      : { ...candidate, offset, x: caretBoxOnLine(line, offset, context.measurer, segment).x };
+  }
   const first = spans[0]!;
   if (x <= first.box.x) return { offset: line.range.start, x: first.box.x, withinSpan: false };
 
@@ -851,26 +875,8 @@ function endOfLine(line: LineRecord, rightEdge: number, context: HitContext): Li
 }
 
 /**
- * The end position of a line, as Word places it.
- *
- * On a SOFT-WRAPPED line the space that caused the break is painted at the end of the line
- * but the caret belongs before it — otherwise clicking in the right margin puts the caret
- * visually at the start of the NEXT line, which reads as the click having missed. The last
- * line of a paragraph has no such space to discount.
- *
- * A HARD BREAK is the same story with a character that is always there: the position after
- * it belongs to the line the break opened (`caretAt` places it there), so a click in the
- * right margin of the line the break ENDED has to stop in front of it or the caret appears
- * a row below the click.
- *
- * A PAGE break is discounted even on the paragraph's LAST line, which is the one case the
- * last-line shortcut got wrong. The position after such a break is on the next page — and
- * when the remainder is empty it has no line anywhere, because Word Online starts the
- * following block flush at the top of that page. So the caret for it stays behind on the
- * line the break ended, and a click in the wide blank space beside the mark resolved to a
- * position a page away from where it landed: the caret appeared under the pointer and the
- * typing came out on the next page. `<w:p><w:r><w:br w:type="page"/></w:r></w:p>` is the
- * commonest way to end a page, so that blank space is most of a page wide.
+ * Logical line end, excluding the wrap space or hard break whose following position
+ * belongs to the next line. Page breaks are excluded even on the paragraph's last line.
  */
 export function lineEndOffset(layout: SemanticLayout, line: LineRecord): number {
   const end = line.range.end;
@@ -938,6 +944,7 @@ function boundariesOf(span: StyleSpanRecord): readonly number[] {
 function prefixWidth(span: StyleSpanRecord, utf16: number, measurer: TextMeasurer): number {
   const edges = span.caretEdges;
   if (edges && utf16 >= 0 && utf16 < edges.length) return edges[utf16]!;
+  if (span.style.shaping) return bidiPrefixWidth(span, utf16, measurer);
 
   let perSpan = prefixCache.get(measurer);
   if (!perSpan) {
@@ -995,6 +1002,8 @@ export function spanOffsetX(
   const length = span.range.end - span.range.start;
   if (length <= 0) return span.box.x;
   const within = Math.max(0, Math.min(offset - span.range.start, length));
+  const physical = (advance: number) =>
+    span.box.x + (span.style.shaping?.direction === 'rtl' ? span.box.width - advance : advance);
   // Published cluster edges win WHEN PRESENT (a producer may attach them); layout itself
   // measures prefixes on demand instead of publishing eager per-character arrays.
   const edges = span.caretEdges;
@@ -1002,9 +1011,9 @@ export function spanOffsetX(
   // Layout-owned advances (tabs, projected fields): always use the published box. Measuring
   // `\t` or multi-digit PAGE ink would disagree with breakParagraph's stop geometry.
   if (!measurer || usesPublishedAdvance(span)) {
-    return span.box.x + span.box.width * (within / length);
+    return physical(span.box.width * (within / length));
   }
-  return span.box.x + prefixWidth(span, within, measurer);
+  return physical(prefixWidth(span, within, measurer));
 }
 
 /**
@@ -1064,17 +1073,11 @@ export function caretBoxOnLine(
     // paragraph they cannot see. The ascent the line was measured at is what a caret in it
     // should be, and it survives the collapse for exactly this.
     //
-    // Drawn ENDING at the collapse point, not starting from it. The line sits on the cell's
-    // content bottom, so growing downward puts the whole caret outside the row and over
-    // whatever block follows the table. Growing upward puts it inside the row that owns the
-    // paragraph, which is the invariant worth having and the one the tests pin.
+    // End at the collapse point so the caret remains inside the owning row.
+    // Growing downward would paint over the following table or paragraph.
     //
-    // It does land in the band the preceding table occupies, and horizontally wherever the
-    // terminator's OWN `w:ind` and `w:jc` put it — so a centred or indented terminator puts
-    // the caret over that table's text. That is not a placement bug to route around: it is
-    // where the text a keystroke produces will appear. Neither alternative is available
-    // either, because the paragraph's own band is empty by construction and a table that
-    // fills the cell leaves no column beside it.
+    // The terminator keeps its own authored horizontal alignment, even over a preceding
+    // table: this is where subsequent typed text will appear.
     //
     // Restricted to a zero box on purpose. A spanless line whose `leading` and
     // `trailingSpacing` happen to consume it is an ordinary spaced empty paragraph that
@@ -1094,6 +1097,11 @@ export function caretBoxOnLine(
     }
     if (offset === span.range.end) {
       const next = spans[index + 1];
+      // Shaped caret stops use downstream affinity at a shared logical boundary.
+      if (next?.range.start === offset && span.style.shaping && next.style.shaping) {
+        chosen = next;
+        break;
+      }
       // Trailing edge of a tab/field: downstream affinity — same model offset as the next
       // span's start, but the visual insertion point belongs with the following text.
       if (next && next.range.start === offset && usesPublishedAdvance(span)) {
@@ -1136,23 +1144,23 @@ export function caretBoxOnLine(
 }
 
 function offsetWithinSpan(span: StyleSpanRecord, x: number, context: HitContext): LineOffset {
-  const target = x - span.box.x;
+  const rtl = span.style.shaping?.direction === 'rtl';
+  const target = rtl ? span.box.x + span.box.width - x : x - span.box.x;
+  const physical = (advance: number) => span.box.x + (rtl ? span.box.width - advance : advance);
   const length = span.range.end - span.range.start;
 
-  // Layout-owned advances (tabs, projected fields, other non-1:1 substitutions) are ATOMS —
-  // the caret goes before or after the published box, never inside via measure(`\t`).
+  // Layout-owned advances are atomic before/after positions.
   if (length <= 0 || usesPublishedAdvance(span)) {
     const after = target > span.box.width / 2;
     return {
       offset: after ? span.range.end : span.range.start,
-      x: after ? span.box.x + span.box.width : span.box.x,
+      x: physical(after ? span.box.width : 0),
       withinSpan: true,
     };
   }
 
   if (!context.measurer) {
-    // No measurer: interpolate across the span's own advance. Exact for a uniform advance and
-    // honestly approximate otherwise, rather than pretending to per-glyph precision.
+    // Without a measurer, interpolate the published advance.
     const fraction = Math.max(0, Math.min(1, target / Math.max(span.box.width, Number.EPSILON)));
     const raw = Math.round(fraction * length);
     const boundaries = boundariesOf(span);
@@ -1167,15 +1175,13 @@ function offsetWithinSpan(span: StyleSpanRecord, x: number, context: HitContext)
     }
     return {
       offset: span.range.start + snapped,
-      x: span.box.x + span.box.width * (snapped / length),
+      x: physical(span.box.width * (snapped / length)),
       withinSpan: true,
     };
   }
 
   const boundaries = boundariesOf(span);
-  // Smallest boundary whose prefix width reaches the target, then the nearer of it and the one
-  // before. Ties go to the EARLIER boundary so the answer is stable rather than decided by
-  // float noise, and a grapheme cluster is never split.
+  // Snap to the nearer grapheme boundary, preferring the earlier one on ties.
   let low = 1;
   let high = boundaries.length - 1;
   while (low < high) {
@@ -1190,7 +1196,7 @@ function offsetWithinSpan(span: StyleSpanRecord, x: number, context: HitContext)
   const takeLeft = target - leftWidth <= rightWidth - target;
   return {
     offset: span.range.start + (takeLeft ? left : right),
-    x: span.box.x + (takeLeft ? leftWidth : rightWidth),
+    x: physical(takeLeft ? leftWidth : rightWidth),
     withinSpan: true,
   };
 }

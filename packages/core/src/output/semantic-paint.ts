@@ -1,4 +1,10 @@
-import { paintParagraphMark, paintManualLineBreak } from './semantic-paragraph-marks.ts';
+import { paragraphIsRtl } from '../layout/rtl-paragraph.ts';
+import {
+  paintParagraphMark,
+  paintManualLineBreak,
+  lineTerminatorEdge,
+  positionTerminatorMark,
+} from './semantic-paragraph-marks.ts';
 // Non-authoritative semantic DOM paint: position elements from the numbers layout already
 // published and never measures anything back: no `getBoundingClientRect`, no `offsetWidth`,
 // no `getComputedStyle`, no canvas text metrics. If this file could measure, the DOM would
@@ -1252,7 +1258,8 @@ function paintHyperlinkAnchor(
 function paintLine(
   document: Document,
   line: LineRecord,
-  ctx: DrawingPaintHostContext
+  ctx: DrawingPaintHostContext,
+  paragraphRtl = false
 ): HTMLElement {
   const scale = ctx.scale;
   const element = document.createElement('div');
@@ -1393,13 +1400,26 @@ function paintLine(
 
   // Each boundary's gap is computed ONCE and carried into the next iteration, so a gap is
   // painted exactly once — as a stretch or as a margin, never both, never neither.
+  const bidi = line.spans.some((span) => span.style.shaping !== undefined);
+  let logicalAdvance = 0;
   let pendingGap = 0;
   let previousSpanAbsorbedGap = false;
   for (const [spanIndex, span] of line.spans.entries()) {
     appendDrawingAdvancesBefore(span.range.paragraphId, span.range.start);
-    appendWrapAdvance(span);
+    if (!bidi) appendWrapAdvance(span);
     const band = Math.min(span.box.height + leading, line.box.height);
     const painted = paintSpan(document, span, ctx, band, leading);
+    if (bidi) {
+      painted.style.position = 'relative';
+      painted.style.left = `${(span.box.x - line.contentX - logicalAdvance) * scale}px`;
+      // Paint hosts may reserve a pre-scaled width plus a compensating margin.
+      if (!painted.style.width) painted.style.width = `${span.box.width * scale}px`;
+      painted.style.direction = span.style.shaping?.direction ?? 'ltr';
+      painted.style.unicodeBidi = 'isolate';
+      if (span.style.shaping?.wordSpacingPt)
+        painted.style.wordSpacing = `${span.style.shaping.wordSpacingPt * scale}px`;
+      logicalAdvance += span.box.width;
+    }
     if (pendingGap > 0 && !previousSpanAbsorbedGap) {
       painted.style.marginLeft = `${pendingGap * scale}px`;
     }
@@ -1407,7 +1427,7 @@ function paintLine(
     // trailing space: the browser highlights a space's advance but never a margin, so a
     // margin gap broke the selection band into one block per word on justified lines.
     const next = line.spans[spanIndex + 1];
-    const gapAfter = interSpanGapBefore(line, spanIndex + 1, rankOf);
+    const gapAfter = bidi ? 0 : interSpanGapBefore(line, spanIndex + 1, rankOf);
     previousSpanAbsorbedGap = gapAfter > 0 && next !== undefined && absorbsFollowingGap(span, next);
     if (previousSpanAbsorbedGap) painted.style.wordSpacing = `${gapAfter * scale}px`;
     pendingGap = gapAfter;
@@ -1468,7 +1488,7 @@ function paintLine(
     height: line.box.height,
   });
   if (ctx.showParagraphMarks && line.manualBreakAfter)
-    element.append(paintManualLineBreak(document, line, scale, ctx.revisionStyles));
+    element.append(paintManualLineBreak(document, line, scale, ctx.revisionStyles, paragraphRtl));
   const drawingCtx = drawingContextOf(asResolvedPaintContext(ctx));
   if (line.drawings && line.drawings.length > 0) {
     for (const painted of paintInlineDrawingsOnLine(
@@ -1619,16 +1639,20 @@ function paintFragment(
     const last = fragment.lines[fragment.lines.length - 1];
     if (last) {
       // At the end of the last line's text, which is where the mark itself sits.
-      const end = last.spans[last.spans.length - 1];
       glyph.style.top = `${(last.box.y - fragment.box.y) * scale}px`;
       // No spans means an empty paragraph, whose mark sits at the ALIGNED origin — the same
       // place the caret goes. Reading the line box drew a centred one against the margin.
-      glyph.style.left = `${((end ? end.box.x + end.box.width : last.contentX) - fragment.box.x) * scale}px`;
+      positionTerminatorMark(
+        glyph,
+        lineTerminatorEdge(last, paragraphIsRtl(fragment.props)),
+        fragment.box.x,
+        scale
+      );
       element.append(glyph);
     }
   }
   for (const line of fragment.lines) {
-    const painted = paintLine(document, line, ctx);
+    const painted = paintLine(document, line, ctx, paragraphIsRtl(fragment.props));
     if (fragment.markFormatRevision && line === fragment.lines[fragment.lines.length - 1]) {
       applyParagraphFormatAnchor(painted, fragment, true);
     }

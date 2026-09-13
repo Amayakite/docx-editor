@@ -1,3 +1,4 @@
+import { paragraphIsRtl, spanContentX } from './rtl-paragraph.ts';
 import { pendingLineExclusionSkipAtPlacement } from './pending-line.ts';
 import { emptyParagraphStyleFields } from './empty-paragraph-style.ts';
 // Table row and cell layout over the canonical tree.
@@ -102,8 +103,8 @@ import type {
   TextMeasurer,
   LayoutBox,
 } from './semantic-records.ts';
-import { firstLineShift, type ResolvedListItem } from './list-resolve.ts';
-import { publishListMarker } from './list-marker.ts';
+import { type ResolvedListItem } from './list-resolve.ts';
+import { directionalListFirstLineShift, publishListMarker } from './list-marker.ts';
 import { annotateTableFragmentGeometry } from './semantic-table-interaction.ts';
 import { borderExtentPt, type TableBorderOwnershipBudget } from './table-borders.ts';
 import { type TableVMergeResolveBudget } from './table-vmerge.ts';
@@ -421,6 +422,7 @@ function placeCellParagraph(
     borders,
     shading,
   } = layoutInputs;
+  const rtl = paragraphIsRtl(props);
   // `w:between` (§17.3.1.24): consecutive paragraphs with IDENTICAL border settings are ONE
   // bordered block — the box opens above the first and closes below the last, and each
   // interior boundary carries `w:between` or nothing. This is the cell twin of the body
@@ -456,7 +458,14 @@ function placeCellParagraph(
   // places it at `left - hanging` (or at `left + firstLine` for a positive-firstLine
   // level), and Word's `w:suff` puts the text back at `left` — or after the marker, or at
   // the next tab stop past an overflowing one (§17.9.30).
-  const firstLineOffset = firstLineShift(listItem, indent, deps.measurer, tabStops, available);
+  const firstLineOffset = directionalListFirstLineShift(
+    listItem,
+    indent,
+    deps.measurer,
+    tabStops,
+    available,
+    rtl
+  );
   const rawZones = deps.pageExclusionZones?.() ?? Object.freeze([]);
   const paragraphOrder = deps.paragraphOrderIndex?.(paragraphId) ?? Number.MAX_SAFE_INTEGER;
   const filtered = deps.paragraphOrderIndex
@@ -598,12 +607,16 @@ function placeCellParagraph(
       break;
     }
     y += skipBefore;
-    const lineIndent = originX + indent.left + (lineIndex === 0 ? firstLineOffset : 0);
+    const lineIndent = originX + indent.left + (lineIndex === 0 && !rtl ? firstLineOffset : 0);
     const lineAvailableWidth = Math.max(1, available - (lineIndex === 0 ? firstLineOffset : 0));
     const placedSpans = pendingLine.spans.map((span) => ({
       ...span,
       range: { ...span.range, paragraphId },
-      box: { ...span.box, x: span.box.x + originX, y },
+      box: {
+        ...span.box,
+        x: span.box.x + originX - (rtl && lineIndex === 0 ? firstLineOffset : 0),
+        y,
+      },
     }));
     const alignedSpans = alignSpans(
       placedSpans,
@@ -658,7 +671,7 @@ function placeCellParagraph(
         // caret until something is typed into it, which un-collapses it.
         height: collapseHeight ? 0 : pendingLine.height,
       },
-      contentX: alignedSpans[0]?.box.x ?? lineIndent + alignOffset,
+      contentX: spanContentX(alignedSpans, lineIndent + alignOffset),
       baseline: collapseHeight
         ? Math.max(0, Math.min(pendingLine.baseline, options?.collapseBandAbove ?? 0))
         : pendingLine.baseline,
@@ -821,7 +834,8 @@ function placeCellParagraph(
           listItem,
           deps.measurer,
           rawRecords[0] ? { y: rawRecords[0].box.y, height: rawRecords[0].box.height } : undefined,
-          originX
+          originX,
+          rtl ? indent.left + available + indent.right : undefined
         )
       : undefined;
 

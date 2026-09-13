@@ -1,3 +1,4 @@
+import { paragraphIsRtl, spanContentX } from './rtl-paragraph.ts';
 import * as sectionPrep from './section-preparation.ts';
 import { emptyParagraphStyleFields } from './empty-paragraph-style.ts';
 import {
@@ -178,14 +179,13 @@ import {
 } from './semantic-records.ts';
 import type { NumberingIndex } from './numbering-index.ts';
 import {
-  firstLineShift,
   withResolvedListItems,
   withResolvedListItemsForSession,
   type ResolvedListItem,
 } from './list-resolve.ts';
 import { noteRefNumberingFromNotes } from './field-noteref.ts';
 import { refTokenForTableBlock, resolveStoryRefFieldsWithNoteNumbers } from './field-ref.ts';
-import { publishListMarker } from './list-marker.ts';
+import { directionalListFirstLineShift, publishListMarker } from './list-marker.ts';
 import { FlowCheckpointOwner, flowCheckpointsMatch } from './flow-checkpoint.ts';
 import { createLayoutSession, type FlowCheckpoint, type LayoutSession } from './layout-session.ts';
 import { replaceLayoutSession } from './layout-session.ts';
@@ -1704,12 +1704,13 @@ function layoutBlocksPass(
 
   // Current-pass list map first, so marker ordinals stay fresh when the memo reuses inputs.
   const firstLineOffsetOf = (entry: PreparedParagraph): number =>
-    firstLineShift(
+    directionalListFirstLineShift(
       listItems?.get(entry.paragraph.id) ?? entry.listItem,
       entry.indent,
       measurer,
       entry.tabStops,
-      entry.available
+      entry.available,
+      paragraphIsRtl(entry.props)
     );
 
   // A one-shot cache releases a paragraph only after its final placement. This preserves
@@ -2150,6 +2151,7 @@ function layoutBlocksPass(
       keeps,
     } = entry;
     let { indent, alignment, markRunProperties } = entry;
+    const rtl = paragraphIsRtl(entry.props);
     let available = entry.available;
     // `w:contextualSpacing` (17.3.1.9) drops the gap between paragraphs of the SAME style.
     // Word's own ListParagraph sets it, so without this every Word-authored list carries a
@@ -2481,7 +2483,9 @@ function layoutBlocksPass(
           ? publishListMarker(
               listItem,
               measurer,
-              pending[0] ? { y: pending[0].box.y, height: pending[0].box.height } : undefined
+              pending[0] ? { y: pending[0].box.y, height: pending[0].box.height } : undefined,
+              0,
+              rtl ? indent.left + available + indent.right : undefined
             )
           : undefined;
       const marker = rawMarker
@@ -2760,12 +2764,16 @@ function layoutBlocksPass(
       const columnX = columnOffsetX();
       appliedSkipByLineIndex.set(lineIndex, skipBefore);
       cursorY += skipBefore;
-      const lineIndent = columnX + indent.left + (lineIndex === 0 ? firstLineOffset : 0);
+      const lineIndent = columnX + indent.left + (lineIndex === 0 && !rtl ? firstLineOffset : 0);
       const lineAvailableWidth = Math.max(1, available - (lineIndex === 0 ? firstLineOffset : 0));
       const placedSpans = pendingLine.spans.map((span) => ({
         ...span,
         range: { ...span.range, paragraphId },
-        box: { ...span.box, x: span.box.x + columnX, y: cursorY },
+        box: {
+          ...span.box,
+          x: span.box.x + columnX - (rtl && lineIndex === 0 ? firstLineOffset : 0),
+          y: cursorY,
+        },
       }));
       const alignedSpans = alignSpans(
         placedSpans,
@@ -2814,7 +2822,7 @@ function layoutBlocksPass(
           width: available,
           height: pendingLine.height,
         },
-        contentX: alignedSpans[0]?.box.x ?? lineIndent + alignOffset,
+        contentX: spanContentX(alignedSpans, lineIndent + alignOffset),
         baseline: pendingLine.baseline,
         leading: pendingLine.leading,
         trailingSpacing: pendingLine.trailingSpacing,

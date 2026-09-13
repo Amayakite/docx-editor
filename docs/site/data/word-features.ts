@@ -155,11 +155,12 @@ export const wordFeatures: WordFeature[] = [
     id: 'text.rtl',
     name: 'Right-to-left & bidirectional text',
     category: 'text',
-    editing: 'full',
-    rendering: 'full',
+    editing: 'partial',
+    rendering: 'partial',
     roundTrip: 'full',
     tier: 'community',
-    notes: 'Bidi layout with mirrored alignment; Hebrew locale ships in @docx-editor.dev/i18n.',
+    notes:
+      'Text paragraphs resolve inherited bidi direction, script shaping, visual word order, caret direction, and disjoint selection bands. Equivalent source runs preserve contextual joining. List markers, suffix spacing, and logical list indents follow resolved paragraph direction in body text and table cells. Selection collapse uses available caret positions; some mixed-direction glyph edges have no distinct insertion position. Tabs and inline atoms retain the existing placement path. Complex-script font selection and shaping across formatting boundaries remain partial. Hebrew locale ships in @docx-editor.dev/i18n.',
   },
   {
     id: 'text.effects',
@@ -227,7 +228,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Protects graphemes, punctuation, and full-width number groups across run boundaries. Document theme language selects supplemental East Asian faces. Without that setting, empty East Asian theme faces use inherited Chinese, Japanese, or Korean language hints, with named CJK defaults when no face resolves. Live and export font resolvers receive the selected faces. East Asian font hints cover supported punctuation, symbols, Greek, and Cyrillic ranges while preserving explicit symbol fonts. Reads kinsoku, wordWrap, overflowPunct, strictFirstAndLastChars, language-specific custom line-break sets, and characterSpacingControl. Korean character wrapping follows wordWrap. Compression removes one shared side bearing between adjacent punctuation. Paragraph and explicit line-break boundaries retain their advances. Colons can compress before opening brackets, bounded by the following bracket bearing. If wrapping separates the pair, the paragraph retains natural colon advances. Highlighted and shaded colons retain their advances. Opening glyphs carry an explicit ink offset that native text selection preserves. Ordinary text, authored spaces, other centered punctuation, outlined text, decorated text, and tracked changes retain their advances. Kana uses deterministic advance reductions. Soft-wrap edge compression, font-specific optical compression, and vertical Japanese composition are not modeled. Typography settings have no dedicated UI.',
+      'Protects graphemes, punctuation, and full-width number groups across run boundaries. Document theme language selects supplemental East Asian faces. Without that setting, empty East Asian theme faces use inherited Chinese, Japanese, or Korean language hints, with named CJK defaults when no face resolves. Live and export font resolvers receive the selected faces. East Asian font hints cover supported punctuation, symbols, Greek, and Cyrillic ranges while preserving explicit symbol fonts. Reads kinsoku, wordWrap, overflowPunct, strictFirstAndLastChars, language-specific custom line-break sets, and characterSpacingControl. Korean character wrapping follows wordWrap. Compression removes one shared side bearing between adjacent punctuation. Paragraph and explicit line-break boundaries retain their advances. Colons can compress before opening brackets, bounded by the following bracket bearing. If wrapping separates the pair, the paragraph retains natural colon advances. Highlighted and shaded colons retain their advances. Opening glyphs carry an explicit ink offset that native text selection preserves. Ordinary text, authored spaces, other centered punctuation, outlined text, decorated text, and tracked changes retain their advances. Mirrored RTL punctuation retains its full advance. Kana uses deterministic advance reductions. Soft-wrap edge compression, font-specific optical compression, and vertical Japanese composition are not modeled. Typography settings have no dedicated UI.',
   },
   {
     id: 'paragraphs.spacing',
