@@ -31,6 +31,9 @@ export interface HeadlessThemeFonts {
   readonly majorEastAsia?: string | null;
   /** East Asian body face; optional for backwards-compatible custom views. */
   readonly minorEastAsia?: string | null;
+  /** Language-specific theme faces, keyed by ISO 15924 script. */
+  readonly majorSupplemental?: Readonly<Record<string, string>>;
+  readonly minorSupplemental?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -148,7 +151,10 @@ export function headlessViewOfStore(store: TreePackageStore): HeadlessDocumentVi
       const pkg = currentPackage();
       if (themeFontsPackage !== pkg) {
         themeFonts = Object.freeze(
-          collectThemeSchemeFaces(rootOf(REL.theme, '/word/theme/theme1.xml'))
+          collectThemeSchemeFaces(
+            rootOf(REL.theme, '/word/theme/theme1.xml'),
+            rootOf(REL.settings, '/word/settings.xml')
+          )
         );
         themeFontsPackage = pkg;
       }
