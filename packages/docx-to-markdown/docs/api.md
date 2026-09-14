@@ -14,7 +14,8 @@ openDocumentForExport(
 ): Promise<OpenMarkdownDocumentForExportResult>;
 
 exportMarkdownFrom(
-  session: ExportSession
+  session: ExportSession,
+  options?: MarkdownProjectionOptions
 ): Promise<MarkdownExportResult>;
 
 exportMarkdownLayout(layout: ExportSemanticLayout): MarkdownExportResult;
@@ -26,6 +27,8 @@ Use `exportMarkdown` for a single export. To reuse or inspect a layout, use `ope
 
 ```ts
 interface MarkdownExportResult {
+  /** Unique extracted assets, or [] when images are disabled. */
+  readonly media: readonly MarkdownImageAsset[];
   /** Omitted content and font problems. */
   readonly warnings: readonly MarkdownWarning[];
   /** Primary output: physical page projections with page furniture and provenance. */
@@ -146,6 +149,19 @@ Artifacts without occurrences have no bindings or `unmappedReason`. These includ
 Artifact IDs, occurrence indexes, page IDs, and offsets are valid only within this export.
 
 Tracked changes also participate in layout through `displayMode`: `all-markup` (default) keeps inserted and deleted text visible, `proposed` includes pending insertions and hides pending deletions, and `original` shows the rejected view. Revision mode applies to the whole document.
+
+## Images and portable delivery
+
+Enable `images: true` for relative image links and `result.media` bytes. Use `{ images: { resolveUrl, maxTotalBytes } }` for custom delivery. The default extracted-byte limit is 64 MiB; image extraction is opt-in. `exportMarkdownFrom(session, options)` accepts the same image options and an abort signal.
+
+Set `images: { syntax: 'html' }` to emit `<img>` tags with each occurrence's displayed width and height in whole CSS pixels.
+The default `syntax: 'markdown'` emits standard image links without size attributes.
+Your renderer must support sanitized HTML and retain `width` and `height`.
+Occurrences expose exact `displayWidthPx`, `displayHeightPx`, and `kind` (`inline` or `anchored`).
+Asset `pixelWidth` and `pixelHeight` describe the image bytes, not their displayed size.
+Crop, rotation, and floating text wrapping are not reproduced.
+
+`createMarkdownZip(result)` and `toMarkdownJSON(result)` are exported from the main package. `writeMarkdownBundle(result, { directory })` comes from `/node`. See [image APIs, errors, ownership, and runnable workflows](images.md).
 
 ## Options
 
@@ -356,7 +372,7 @@ Drawing warnings are grouped by category and page, including headers, footers, a
 - Page headers and footers are returned separately per page.
 - Merged table cells are flattened.
 - Nested tables use inline HTML (`<table>`, `<tr>`, `<td>`, and `<th>`). Cells retain inline Markdown.
-- Images affect layout but are omitted from Markdown.
+- Images affect layout. They are omitted by default; `images: true` includes supported images and returns their bytes.
 - Anchored text-box text is omitted because it has no unambiguous linear position; comments and tracked changes inside it remain available as page artifacts with exact text-box provenance.
 - Office Math uses the core semantic equation fallback.
 - A note continued without its reference is emitted as a labeled continuation block in page Markdown.
