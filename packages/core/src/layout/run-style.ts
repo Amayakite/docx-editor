@@ -53,6 +53,8 @@ export interface ResolvedRunStyle {
     readonly direction: 'ltr' | 'rtl';
     readonly level: number;
     readonly baseLevel: number;
+    /** Resolved w:rtl context; absent when authored Unicode controls govern the paragraph. */
+    readonly runDirection?: 'ltr' | 'rtl';
     readonly wordSpacingPt?: number;
   };
   /** Points. `w:sz` is half-points, so 22 becomes 11. */
@@ -154,6 +156,9 @@ export interface ThemeFonts {
   readonly majorEastAsia?: string | null;
   /** `a:minorFont` east asian typeface (`a:ea`) — body text. Optional for back-compat. */
   readonly minorEastAsia?: string | null;
+  /** Complex-script heading and body theme faces. */
+  readonly majorBidi?: string | null;
+  readonly minorBidi?: string | null;
   /** Language-specific theme faces, keyed by ISO 15924 script. */
   readonly majorSupplemental?: Readonly<Record<string, string>>;
   readonly minorSupplemental?: Readonly<Record<string, string>>;
@@ -189,6 +194,7 @@ export function resolveRunStyle(
   // Resolve language first: rFonts commonly precedes lang, and an inherited theme
   // reference must use the final run language, including a character-style override.
   let eastAsiaLanguage: string | undefined;
+  let hasLatinFontReference = false;
   for (const property of props) {
     if (property.localName === 'lang' && property.attributes?.eastAsia !== undefined)
       eastAsiaLanguage = property.attributes.eastAsia;
@@ -203,6 +209,9 @@ export function resolveRunStyle(
         // An unresolvable theme slot falls back to that explicit name rather than to
         // nothing, because a stale face still beats no face at all.
         const attributes = property.attributes;
+        hasLatinFontReference ||= ['ascii', 'hAnsi', 'asciiTheme', 'hAnsiTheme'].some((name) =>
+          Boolean(attributes?.[name])
+        );
         const themed = themeFonts
           ? (themeFontFamilyOf(attributes?.asciiTheme, themeFonts, eastAsiaLanguage) ??
             themeFontFamilyOf(attributes?.hAnsiTheme, themeFonts, eastAsiaLanguage))
@@ -312,7 +321,14 @@ export function resolveRunStyle(
         break;
     }
   }
-  style.fontFamilyEastAsia ??= eastAsianDefaultFamily(eastAsiaLanguage);
+  // An omitted Latin slot inherits the body theme after all authored defaults/styles.
+  // Preserve the existing fallback for an authored but unresolved theme reference.
+  if (!hasLatinFontReference) style.fontFamily ??= themeFonts?.minor ?? null;
+  // Word uses the document body East Asian face when the entire style cascade
+  // omits this slot, including runs whose Latin font uses a heading theme token.
+  // Only use a concrete theme face here; absent theme languages remain host-independent.
+  style.fontFamilyEastAsia ??=
+    themeFonts?.minorEastAsia ?? eastAsianDefaultFamily(eastAsiaLanguage);
   return style;
 }
 
@@ -370,6 +386,7 @@ export function runStylesEqual(a: ResolvedRunStyle, b: ResolvedRunStyle): boolea
     a.shaping?.direction === b.shaping?.direction &&
     a.shaping?.level === b.shaping?.level &&
     a.shaping?.baseLevel === b.shaping?.baseLevel &&
+    a.shaping?.runDirection === b.shaping?.runDirection &&
     a.shaping?.wordSpacingPt === b.shaping?.wordSpacingPt &&
     a.fontFamily === b.fontFamily &&
     a.fontFamilyEastAsia === b.fontFamilyEastAsia &&

@@ -172,11 +172,20 @@ describe('the w:rFonts eastAsia slot resolves beside the Latin one', () => {
   test('an explicit w:eastAsia resolves without touching the Latin family', () => {
     const style = resolved({ eastAsia: 'SimSun' });
     expect(style.fontFamilyEastAsia).toBe('SimSun');
-    expect(style.fontFamily).toBeNull();
+    expect(style.fontFamily).toBe('Grandview');
   });
 
   test('a Latin-only rFonts leaves the eastAsia slot inherited', () => {
-    expect(resolved({ ascii: 'Arial' }).fontFamilyEastAsia).toBeNull();
+    expect(
+      resolveRunStyle(
+        [
+          { localName: 'rFonts', attributes: { eastAsia: 'Inherited CJK' } },
+          { localName: 'rFonts', attributes: { ascii: 'Arial' } },
+        ],
+        theme
+      ).fontFamilyEastAsia
+    ).toBe('Inherited CJK');
+    expect(resolved({ ascii: 'Arial' }).fontFamilyEastAsia).toBe('SimSun');
   });
 
   test('w:eastAsiaTheme resolves against the a:ea typefaces', () => {

@@ -333,6 +333,8 @@ interface SummaryMemo {
   readonly minor: string | null;
   readonly majorEastAsia: string | null;
   readonly minorEastAsia: string | null;
+  readonly majorBidi: string | null | undefined;
+  readonly minorBidi: string | null | undefined;
   readonly summary: RenderedFontsSummary;
 }
 const summaryMemos = new WeakMap<OoxmlElement, SummaryMemo>();
@@ -348,7 +350,9 @@ function summaryOf(
     cached.major === themeFonts.major &&
     cached.minor === themeFonts.minor &&
     cached.majorEastAsia === themeFonts.majorEastAsia &&
-    cached.minorEastAsia === themeFonts.minorEastAsia
+    cached.minorEastAsia === themeFonts.minorEastAsia &&
+    cached.majorBidi === themeFonts.majorBidi &&
+    cached.minorBidi === themeFonts.minorBidi
   ) {
     return cached.summary;
   }
@@ -381,6 +385,8 @@ function summaryOf(
     minor: themeFonts.minor,
     majorEastAsia: themeFonts.majorEastAsia,
     minorEastAsia: themeFonts.minorEastAsia,
+    majorBidi: themeFonts.majorBidi,
+    minorBidi: themeFonts.minorBidi,
     summary,
   });
   return summary;
@@ -422,6 +428,8 @@ interface StyleIndexMemo {
   readonly minor: string | null;
   readonly majorEastAsia: string | null;
   readonly minorEastAsia: string | null;
+  readonly majorBidi: string | null | undefined;
+  readonly minorBidi: string | null | undefined;
   readonly index: StyleIndex;
 }
 const styleIndexMemos = new WeakMap<OoxmlElement, StyleIndexMemo>();
@@ -452,6 +460,15 @@ function buildStyleIndex(stylesRoot: OoxmlElement, themeFonts: DocumentThemeFont
     docDefaultFamily = rPrFamily(rPrDefault, themeFonts);
     docDefaultEastAsiaFamily = rPrEastAsiaFamily(rPrDefault, themeFonts);
   }
+
+  const defaultRPr = rPrDefault ? childElement(rPrDefault, 'rPr') : undefined;
+  const defaultRFonts = defaultRPr ? childElement(defaultRPr, 'rFonts') : undefined;
+  const hasLatinReference =
+    defaultRFonts &&
+    ['ascii', 'hAnsi', 'asciiTheme', 'hAnsiTheme'].some((name) =>
+      Boolean(attributeValue(defaultRFonts, name))
+    );
+  if (!hasLatinReference) docDefaultFamily ??= themeFonts.minor;
 
   let counted = 0;
   for (const child of stylesRoot.children as readonly OoxmlNode[]) {
@@ -530,14 +547,20 @@ function buildStyleIndex(stylesRoot: OoxmlElement, themeFonts: DocumentThemeFont
 }
 
 function styleIndexOf(stylesRoot: OoxmlElement | null, themeFonts: DocumentThemeFonts): StyleIndex {
-  if (!stylesRoot) return EMPTY_STYLE_INDEX;
+  if (!stylesRoot)
+    return {
+      ...EMPTY_STYLE_INDEX,
+      docDefaultFamilies: themeFonts.minor ? [themeFonts.minor] : [],
+    };
   const cached = styleIndexMemos.get(stylesRoot);
   if (
     cached &&
     cached.major === themeFonts.major &&
     cached.minor === themeFonts.minor &&
     cached.majorEastAsia === themeFonts.majorEastAsia &&
-    cached.minorEastAsia === themeFonts.minorEastAsia
+    cached.minorEastAsia === themeFonts.minorEastAsia &&
+    cached.majorBidi === themeFonts.majorBidi &&
+    cached.minorBidi === themeFonts.minorBidi
   ) {
     return cached.index;
   }
@@ -547,6 +570,8 @@ function styleIndexOf(stylesRoot: OoxmlElement | null, themeFonts: DocumentTheme
     minor: themeFonts.minor,
     majorEastAsia: themeFonts.majorEastAsia,
     minorEastAsia: themeFonts.minorEastAsia,
+    majorBidi: themeFonts.majorBidi,
+    minorBidi: themeFonts.minorBidi,
     index,
   });
   return index;
