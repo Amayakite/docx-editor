@@ -1,4 +1,9 @@
-import { mintCheckboxRun } from './content-control-run.ts';
+import {
+  checkboxContent,
+  checkboxStateHexes,
+  isInlineControl,
+  type CheckboxSymbol,
+} from './content-control-checkbox.ts';
 import { validateCommitTextFormField } from './tree-op-field-results.ts';
 import { enforcesFormsProtection, sectionProtectsForms } from './forms-protection.ts';
 export {
@@ -51,6 +56,7 @@ import { isValidXmlText } from '../package/sinks.ts';
 import type { OoxmlElement, OoxmlNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import {
   TEXT_DEPS,
+  contentControlContentOf,
   fromEdit,
   parentOf,
   parseCheckboxValue,
@@ -1343,7 +1349,7 @@ interface PlannedValue {
   readonly lastValue?: string;
   readonly fullDate?: string;
   readonly checked?: boolean;
-  readonly symbol?: { readonly hex: string; readonly font: string };
+  readonly symbol?: CheckboxSymbol;
 }
 
 /**
@@ -1426,6 +1432,7 @@ function planValue(
         symbol: {
           hex: state?.value ?? (value.checked ? '2612' : '2610'),
           font: state?.font ?? 'MS Gothic',
+          states: checkboxStateHexes(properties.checkbox),
         },
       };
     }
@@ -1583,12 +1590,9 @@ export function editedProperties(
 function contentWithText(
   content: OoxmlElement | undefined,
   text: string,
-  nextId: () => string,
-  symbol?: PlannedValue['symbol']
+  nextId: () => string
 ): readonly OoxmlNode[] {
-  const run = symbol
-    ? mintCheckboxRun(nextId, symbol.hex, symbol.font, firstRunProperties(content, nextId), text)
-    : textRun(nextId, text, firstRunProperties(content, nextId));
+  const run = textRun(nextId, text, firstRunProperties(content, nextId));
   const firstParagraph = content?.children.find((child) => child.kind === 'paragraph');
   if (!firstParagraph || firstParagraph.kind === 'textValue') return [run];
   const pPr = firstParagraph.children.find(
@@ -1647,7 +1651,14 @@ export function applySetContentControlValue(
 
   const nextId = createNodeIdAllocator(part);
   const sdtPr = contentControlPropertiesContainerOf(control);
-  const content = contentControlContentNodeOf(control);
+  // By name, not by kind: a `w:sdtContent` holding a child outside its typed set (a simple
+  // field, say) demotes to generic, and must still be the one content node the write replaces.
+  const content = contentControlContentOf(control);
+  const inline = isInlineControl(part, control.id);
+  const children = planned.symbol
+    ? checkboxContent(content, planned.symbol, planned.text, nextId, inline)
+    : contentWithText(content, planned.text, nextId);
+  if (!children) return { ok: false, reason: 'unsupported' };
   const nextProperties = editedProperties(
     sdtPr,
     {
@@ -1661,16 +1672,14 @@ export function applySetContentControlValue(
   const nextContent = {
     ...(content ??
       wmlElement(nextId, 'sdtContent', { kind: 'contentControlContent' as OoxmlNode['kind'] })),
-    children: contentWithText(content, planned.text, nextId, planned.symbol),
+    children,
   } as OoxmlNode;
 
   const rebuilt = {
     ...control,
     children: [
       nextProperties,
-      ...control.children.filter(
-        (child) => child.id !== sdtPr?.id && child.kind !== 'contentControlContent'
-      ),
+      ...control.children.filter((child) => child.id !== sdtPr?.id && child.id !== content?.id),
       nextContent,
     ],
   } as OoxmlNode;

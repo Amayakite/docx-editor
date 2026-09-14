@@ -8,7 +8,14 @@
 import type { OoxmlNode, OoxmlParagraphNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import { isValidXmlText } from '../package/sinks.ts';
 import {
+  checkboxContentWritable,
+  decodeCheckboxGlyph,
+  isInlineControl,
+} from './content-control-checkbox.ts';
+import {
+  checkboxPayloadOf,
   contentControlAncestorsOf,
+  contentControlContentOf,
   contentControlValueTypeOf,
   declaredLockOf,
   effectiveContentLockAt,
@@ -260,8 +267,23 @@ export function validateSetContentControlValue(
     }
     case 'combo':
       return null;
-    case 'checkbox':
-      return parseCheckboxValue(value) === null ? 'typeMismatch' : null;
+    case 'checkbox': {
+      if (parseCheckboxValue(value) === null) return 'typeMismatch';
+      const payload = checkboxPayloadOf(control);
+      if (!payload) return 'typeMismatch';
+      // A state that names no code point cannot be written; the typed path refuses it too.
+      if (
+        decodeCheckboxGlyph(payload.checkedGlyph) === null ||
+        decodeCheckboxGlyph(payload.uncheckedGlyph) === null
+      ) {
+        return 'invalidArgs';
+      }
+      // The applier refuses content it cannot rewrite in place; say so before the write.
+      const inline = isInlineControl(part, controlId);
+      return checkboxContentWritable(contentControlContentOf(control), inline)
+        ? null
+        : 'unsupported';
+    }
     case 'date': {
       if (formatSdtDateDisplay(value, undefined) === null) return 'invalidArgs';
       return null;
