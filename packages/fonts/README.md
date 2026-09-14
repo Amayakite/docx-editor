@@ -40,10 +40,10 @@ import { DocxEditor, useFonts } from '@docx-editor.dev/react';
 // is a floor. `allow` narrows it further.
 function Editor({ bytes }: { bytes: Uint8Array }) {
   // `useFonts` is not optional here. The `fonts` prop rebuilds the editor when
-  // its identity changes, and `packagedFonts()` written inline is a new function
-  // on every render; `useFonts` keeps one for the component's life.
+  // its identity changes. An inline resolver is a new function on every render.
+  // `useFonts` keeps one for the component's life.
   const fonts = useFonts(packagedFonts());
-  return <DocxEditor.Root document={bytes} fonts={fonts} />;
+  return <DocxEditor document={bytes} fonts={fonts} />;
 }
 ```
 
@@ -62,26 +62,88 @@ and 7.4 MB whichever document opens — use `defaultFonts()`:
 import { createDocxEditor } from '@docx-editor.dev/core/editor';
 import { defaultFonts } from '@docx-editor.dev/fonts';
 
-const fonts = await defaultFonts(); // or { families: ['Calibri'] }
+const fonts = await defaultFonts(); // Add families to load a subset.
 const editor = createDocxEditor({ document: bytes, fonts });
 ```
 
-`defaultFonts()` and `packagedFonts()` supply font bytes. The editor registers those
-bytes under private aliases for paint. They leave public CSS family names unchanged,
-so substitutes cannot hide native glyphs or change the host application's fonts.
-`loadDefaultFonts()` returns the same fragment without reporting failures to the console.
+## Custom fonts for the editor
 
-For an explicit page-wide replacement, use `installDefaultFontFaces()` or
-`packagedFonts({ install: true })`. These options register substitutes under Word family
-names. They can hide native glyphs for scripts the substitutes do not cover.
-If you need this behavior, reuse loaded bytes to avoid another font request:
+Use `customFonts()` to supply brand fonts or licensed Word fonts to the editor.
+Put it first so your supplied faces take precedence.
 
-```ts
-import { installDefaultFontFaces, loadDefaultFonts } from '@docx-editor.dev/fonts';
+```tsx
+import { customFonts } from '@docx-editor.dev/core/editor';
+import { packagedFonts } from '@docx-editor.dev/fonts';
+import { googleFonts } from '@docx-editor.dev/fonts/google';
+import { DocxEditor, useFonts } from '@docx-editor.dev/react';
 
-const loaded = await loadDefaultFonts();
-await installDefaultFontFaces({ loaded: loaded.sources });
+function Editor({ bytes }: { bytes: Uint8Array }) {
+  const fonts = useFonts(
+    customFonts({
+      sources: [
+        {
+          url: '/fonts/AcmeSans-Regular.ttf',
+          family: 'Acme Sans',
+          weight: 400,
+          style: 'normal',
+        },
+        {
+          url: '/fonts/AcmeSans-Bold.ttf',
+          family: 'Acme Sans',
+          weight: 700,
+          style: 'normal',
+        },
+      ],
+      onFailure: (failure) => console.warn(failure.request.family, failure.reason),
+    }),
+    packagedFonts(),
+    googleFonts()
+  );
+  return <DocxEditor document={bytes} fonts={fonts} />;
+}
 ```
+
+`customFonts()` loads all configured faces when the editor resolves its fonts.
+Creating the resolver fetches nothing. It skips faces already supplied by earlier origins,
+matching family names without case sensitivity, plus weight and style.
+
+Loaded company fonts become available for selection, including in blank documents.
+Loading fonts does not apply them to document text.
+
+The helper uses `loadFonts` for validation and caching. `onFailure` receives each
+failed face and defaults to `console.warn`. Cancellation does not trigger `onFailure`.
+Core registers the supplied bytes under private names, without changing fonts elsewhere in your app.
+
+`loadFonts()` from Core remains the lower-level eager loader. It starts loading
+every listed source when called and returns admitted bytes with a typed `failures` list.
+
+## Font registration
+
+`defaultFonts()` and `packagedFonts()` supply font bytes for the editor. Core
+registers these bytes under private font names. Your app's header and sidebar keep
+their existing fonts. Native fonts remain available for glyphs missing from the substitutes.
+
+### Upgrade from page-wide registration
+
+Earlier loaders could register substitutes under public names such as `Arial`.
+Font loaders now supply bytes for private editor registration only.
+Existing calls still compile, but public registration no longer occurs.
+If you already pass `packagedFonts()` or `defaultFonts()` through the editor's `fonts` option, keep that configuration.
+
+The `packagedFonts` option `install` is deprecated and ignored, including `true`.
+Remove it while keeping your other loader options:
+
+```diff
+- fonts: packagedFonts({ install: true, onFailure })
++ fonts: packagedFonts({ onFailure })
+```
+
+`installDefaultFontFaces()` is deprecated. It does nothing and resolves to `0`, without fetching or registering fonts.
+Remove its calls and supply `packagedFonts()` or `defaultFonts()` through the editor's `fonts` option instead.
+`defaultFonts()` has no `install` option. `loadDefaultFonts()` remains bytes-only.
+
+If surrounding app text relied on these public fonts, configure those fonts separately with your app's CSS or font loader.
+Check headers, sidebars, and other app text after upgrading; their previous fonts become available again.
 
 Nothing loads until you call one of these: importing the package fetches no bytes, and
 the editor engine never calls in here on its own.
@@ -95,13 +157,17 @@ family. Each face's `sha256:` hash is baked at packaging time
 `@docx-editor.dev/fonts/google` ships nothing in the bundle and fetches nothing until a
 document names a family the catalog covers.
 
-```ts
+```tsx
 import { googleFonts } from '@docx-editor.dev/fonts/google';
+import { DocxEditor, useFonts } from '@docx-editor.dev/react';
 
-// A resolver, not a value: the editor calls it on load and when new families are selected, with the families
-// the file declares plus its default face, and only those are fetched.
-<DocxEditor.Root document={bytes} fonts={googleFonts()} />;
+function Editor({ bytes }: { bytes: Uint8Array }) {
+  const fonts = useFonts(googleFonts());
+  return <DocxEditor document={bytes} fonts={fonts} />;
+}
 ```
+
+The editor requests fonts on load and when edits or font selection introduce new families.
 
 Open a file that uses only Calibri and one family is fetched (Carlito, its
 metric-compatible stand-in). A document's DEFAULT face counts as declared, and that
