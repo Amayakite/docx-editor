@@ -22,6 +22,7 @@ import { validateOoxmlPartDelta, type OoxmlPart } from '../package/ooxml-tree.ts
 import { withPart, type OoxmlPackage } from '../package/ooxml-package.ts';
 import { validatePackageInvariants } from '../package/package-edit.ts';
 import { settingsPartOf } from '../package/note-properties.ts';
+import { documentProtectionRefusal } from './forms-protection.ts';
 import { ORIGIN_IDS } from '../registry/frozen-ids.ts';
 import {
   formsProtectionRefusal,
@@ -576,16 +577,18 @@ export class TreeDocumentStore {
       // Forms protection lives in `settings.xml`, one part up from the op, so it is resolved
       // HERE rather than in the per-part applier: a part alone cannot see whether the document
       // it belongs to is protected.
-      const protection = formsProtectionRefusal(
-        target,
-        this.settingsPartOverride?.() ?? settingsPartOf(working),
-        op,
-        fillingField?.partName === partName &&
-          'paragraphId' in op &&
-          fillingField.paragraphId === op.paragraphId
-          ? fillingField.fieldNodeId
-          : undefined
-      );
+      const protection =
+        documentProtectionRefusal(this.settingsPartOverride?.() ?? settingsPartOf(working), op) ??
+        formsProtectionRefusal(
+          target,
+          this.settingsPartOverride?.() ?? settingsPartOf(working),
+          op,
+          fillingField?.partName === partName &&
+            'paragraphId' in op &&
+            fillingField.paragraphId === op.paragraphId
+            ? fillingField.fieldNodeId
+            : undefined
+        );
       if (protection) {
         failure = { reason: protection };
         return false;
@@ -662,6 +665,22 @@ export class TreeDocumentStore {
       applyTo: (partName, op) => applyToPart(partName, op),
       applyPackage: (edit) => {
         if (failure) return false;
+        // The package channel imports and rewrites whole parts, so it needs the document-wide
+        // refusal as much as the per-op one does: comment deletion and thread resolution reach
+        // the story's own `w:commentRangeStart` through here, and nothing else would stop them
+        // in a document protected read-only.
+        // `documentProtectionRefusal`, NOT the lifecycle one: forms protection is not
+        // document-scoped here. A story transaction carries a package edit whenever it
+        // touches resources, and the collaboration and automation lanes append one
+        // unconditionally — judging those document-scoped refused every collaborative and
+        // scripted fill of the very fields forms protection exists to permit.
+        const packageProtection = documentProtectionRefusal(
+          this.settingsPartOverride?.() ?? settingsPartOf(working)
+        );
+        if (packageProtection) {
+          failure = { reason: packageProtection };
+          return false;
+        }
         // The SECOND write channel, and it imports whole parts — a pasted fragment carries
         // its own revision ids. The shared id is taken from the part it first saw, so it goes
         // here for the same reason a non-property op drops it.

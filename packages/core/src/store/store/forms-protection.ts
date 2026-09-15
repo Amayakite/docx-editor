@@ -1,5 +1,56 @@
 import type { OoxmlNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import { WML_NAMESPACE_URI } from '../package/ooxml-shared.ts';
+import { readDocumentProtection } from '../package/document-protection.ts';
+import type { TreeDocOp } from './tree-op-types.ts';
+import type { TreeOpRejection } from './tree-op-validate.ts';
+
+/**
+ * The refusal a PACKAGE-level commit gets: furniture and note lifecycle, and the package edit
+ * channel, none of which reach the per-op applier.
+ *
+ * FORMS protection refuses here as well, which `documentProtectionRefusal` alone does not do.
+ * Forms protection inverts the usual rule — the document is read-only EXCEPT inside a form
+ * field — and a package-level commit is never inside one: creating a header, inserting a note
+ * or setting a section flag is document-scoped by construction. Reading only the two
+ * document-wide modes let a forms-protected document answer "Insert footnote" with a new
+ * `footnotes.xml` while refusing a keystroke in the same paragraph.
+ *
+ * The protection toggle is exempt, and the exemption is the point: it is the command that
+ * LIFTS the lock, and a guard that trapped it would leave the reader with no way back in.
+ */
+export function lifecycleProtectionRefusal(
+  settings: OoxmlPart | null | undefined,
+  op: { readonly op: string }
+): TreeOpRejection | null {
+  if (op.op === 'setDocumentProtection') return null;
+  const protection = readDocumentProtection(settings?.root);
+  if (protection.enforced && protection.edit === 'forms') return 'locked';
+  return documentProtectionRefusal(settings);
+}
+
+/**
+ * The refusal an enforced `readOnly` or `comments` protection gives a write.
+ *
+ * Read-only admits no edit at all. Comments-only admits the comment ANCHOR and nothing else.
+ * Adding a comment is still refused overall: its text lands in `comments.xml` through the
+ * package channel, which carries no `op` and so cannot claim the exemption — the narrowing is
+ * recorded in the feature matrix rather than worked around here. Coarser than Word in one more
+ * respect: Word lets an edit through inside a `w:permStart` exception range, and this editor
+ * refuses there too, because a refusal the reader can see beats a write the protection was
+ * meant to stop. `forms` and `trackedChanges` are answered elsewhere: forms by
+ * `formsProtectionRefusal` and by `lifecycleProtectionRefusal` above, tracked changes by the
+ * editing-mode gate.
+ */
+export function documentProtectionRefusal(
+  settings: OoxmlPart | null | undefined,
+  op?: TreeDocOp
+): TreeOpRejection | null {
+  const protection = readDocumentProtection(settings?.root);
+  if (!protection.enforced) return null;
+  if (protection.edit === 'readOnly') return 'locked';
+  if (protection.edit === 'comments' && op?.op !== 'insertCommentMarker') return 'locked';
+  return null;
+}
 
 /**
  * Whether `settings.xml` enforces `w:documentProtection w:edit="forms"` (§17.15.1.29).
@@ -13,22 +64,16 @@ export function enforcesFormsProtection(settings: OoxmlPart | null | undefined):
   return formsProtectionEnabled(settings?.root);
 }
 
-/** Read forms protection from the settings root. */
+/**
+ * Read forms protection from the settings root.
+ *
+ * Delegates to the ONE parse of `w:documentProtection` rather than reading the element again:
+ * a second reading of `@w:enforcement` is how a document ends up protected to the Review menu
+ * and unprotected to the store.
+ */
 export function formsProtectionEnabled(root: OoxmlNode | null | undefined): boolean {
-  if (!root || root.kind === 'textValue') return false;
-  for (const child of root.children) {
-    if (child.kind === 'textValue') continue;
-    if (child.namespaceUri !== WML_NAMESPACE_URI || child.localName !== 'documentProtection') {
-      continue;
-    }
-    const attribute = (name: string): string | undefined =>
-      child.attributes.find(
-        (entry) => entry.localName === name && entry.namespaceUri === WML_NAMESPACE_URI
-      )?.value;
-    if (attribute('edit') !== 'forms') return false;
-    return isTrue(attribute('enforcement'));
-  }
-  return false;
+  const protection = readDocumentProtection(root);
+  return protection.edit === 'forms' && protection.enforced;
 }
 
 /** `ST_OnOff`: absent means on for a flag element, and "0"/"false"/"off" always means off. */

@@ -6,6 +6,9 @@ import { composeFontOrigins, defineFontResolver } from './font-resolver.ts';
 import { createEditorPopupChrome } from './text-form-field-chrome.ts';
 import { createReviewCommands } from './docx-editor-review-commands.ts';
 import { canEditorViewCommand, createEditorParagraphMarks } from './docx-editor-view-commands.ts';
+import { completePendingSuggesting } from './opening-editing-mode.ts';
+import { formattingCommandActive } from './docx-editor-active.ts';
+import { createDocumentProtectionCommands } from './docx-editor-protection.ts';
 // The Editor facade owns the document session, semantic layout, and painted pages.
 // - REAL: load/save, the exec subset below (marks, mark attributes via `setMarkAttr`,
 //   alignment, indent, line break, undo/redo, semantic setSelection, selection-addressed
@@ -311,6 +314,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
    * for, and the reader saying otherwise outranks it for the rest of the session.
    */
   let readerChoseMode = false;
+  /** True while the editor sits in viewing because a protection put it there, not the reader. */
+  let engineAdoptedViewing = false;
+
   /** A refusal this facade made before the surface could see the request; see `snapshot`. */
   let facadeRejection: string | null = null;
 
@@ -455,6 +461,28 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     surface?.setShowParagraphMarks(visible);
     bump();
     emitSelectionChange();
+  });
+  // Closures only: every dependency is read when a command runs, not at construction.
+  const protection = createDocumentProtectionCommands({
+    surface: () => surface,
+    destroyed: () => destroyed,
+    editingMode: () => editingMode,
+    hostViewOnly: () => hostConfig.mode() === 'view',
+    publish: () => {
+      bump();
+      emitSelectionChange();
+    },
+    decision: () => documentTrackingDecision(),
+    tracking: documentTracking,
+    adopt: (decision) => {
+      facadeRejection = decision.rejection ?? standingRejection(null);
+      if (decision.mode !== null) {
+        engineAdoptedViewing = decision.mode === 'viewing';
+        applyEditingMode(decision.mode);
+      }
+      bump();
+      emitSelectionChange();
+    },
   });
 
   /** Called at every place observable state can move. Derivation stays lazy. */
@@ -609,6 +637,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         // re-derivation returns the previous snapshot reference, so a no-op publish costs
         // one comparison, never a spurious re-render.
         bump();
+        protection.sync();
         liveFonts.schedule();
         const displayModeMoved =
           reviewEnabled && reviewDisplayMode !== surface.revisionDisplayMode();
@@ -632,6 +661,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     }
     parseError = null;
     surface = result.surface;
+    // Before anything can publish: the mount decides the mode itself just below, and a sync
+    // firing in between would decide a second time and clear what the first one published.
+    protection.prime();
     // Keep the loading page centred and its comments control inactive until the review
     // model exists. Once open completes, show the pane only when the model found content.
     reviewPaneOpen = reviewEnabled && surface.session.reviewItems().length > 0;
@@ -1117,6 +1149,7 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       pageSetup: pageSetupOf(surface),
       reviewPaneOpen,
       showParagraphMarks: paragraphMarks.get(),
+      documentProtection: protection.state(),
       reviewDisplayMode:
         surface && reviewEnabled ? surface.revisionDisplayMode() : reviewDisplayMode,
       hasReviewContent: surface?.session.hasReviewContent() ?? false,
@@ -1642,6 +1675,10 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       currentMode,
       trackRevisions: tracking.trackRevisions,
       restrictedToTrackedChanges: tracking.restrictedToTrackedChanges,
+      restrictedToForms: tracking.restrictedToForms,
+      restrictedToReadOnly: tracking.restrictedToReadOnly,
+      restrictedToComments: tracking.restrictedToComments,
+      engineAdoptedViewing,
     });
   }
 
@@ -1665,8 +1702,9 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
   function adoptDocumentTracking(): void {
     const decision = documentTrackingDecision();
     facadeRejection = standingRejection(decision.rejection);
-    if (decision.mode !== 'suggesting') return;
-    applyEditingMode('suggesting');
+    if (decision.mode === null) return;
+    engineAdoptedViewing = decision.mode === 'viewing';
+    applyEditingMode(decision.mode);
   }
 
   /** A deferred open must resolve host intent against the incoming document, not the old one. */
@@ -1681,8 +1719,11 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       suggestingGuards(),
       documentTracking(),
       editingMode,
-      fallback
+      fallback,
+      engineAdoptedViewing
     );
+    // This lane decides too, so it records what it adopted.
+    engineAdoptedViewing = decision.mode === 'viewing' && hostConfig.mode() !== 'view';
     if (decision.mode !== editingMode) applyEditingMode(decision.mode);
     facadeRejection = standingRejection(decision.rejection);
     suggestingReporter.report(decision.configurationRejection);
@@ -1887,6 +1928,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         emitSelectionChange();
         return { ok: true, changed: false };
       }
+      const protectionResult = protection.exec(command);
+      if (protectionResult) return protectionResult;
       const reviewResult = reviewCommands.exec(command);
       if (reviewResult) return reviewResult;
       if (isContentControlEditorCommand(command)) {
@@ -1942,6 +1985,8 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
         editingModeRefusal
       );
       if (viewCapability) return viewCapability;
+      const protectionCapability = protection.can(command);
+      if (protectionCapability) return protectionCapability;
       const reviewCapability = reviewCommands.can(command);
       if (reviewCapability) return reviewCapability;
       if (isContentControlEditorCommand(command)) {
@@ -2006,41 +2051,15 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
     // stays honest-false until its derivation exists.
     isActive(command) {
       if (command.type === 'toggleParagraphMarks') return paragraphMarks.get();
+      if (command.type === 'toggleDocumentProtection') return protection.isActive();
       if (command.type === 'setReviewDisplayMode') return reviewDisplayMode === command.mode;
       if (command.type === 'toggleReviewPane') return reviewPaneOpen;
       if (command.type === 'setEditingMode') return editingMode === command.mode;
-      const formatting = surface ? snapshotNow().formatting : null;
-      if (!formatting) return false;
-      switch (command.type) {
-        case 'toggleMark':
-          switch (command.mark) {
-            case 'bold':
-              return formatting.bold === true;
-            case 'italic':
-              return formatting.italic === true;
-            case 'underline':
-              return formatting.underline === true;
-            case 'strike':
-              return formatting.strike === true;
-            // One property, two of its values: each is pressed only for its OWN value, so
-            // superscripted text shows Subscript un-pressed rather than both lit.
-            case 'superscript':
-              return formatting.superscript === true;
-            case 'subscript':
-              return formatting.subscript === true;
-            default:
-              return false;
-          }
-        case 'setAlignment':
-          // `exec` writes `justify` as `both`; compare in the same vocabulary.
-          return formatting.alignment === (command.align === 'justify' ? 'both' : command.align);
-        case 'toggleList':
-          // Pressed only when the WHOLE selection is that list, matching the toggle's own
-          // rule: a mixed selection is not "on".
-          return surface?.isListActive(command.kind) ?? false;
-        default:
-          return false;
-      }
+      return formattingCommandActive(
+        command,
+        surface ? snapshotNow().formatting : null,
+        (kind) => surface?.isListActive(kind) ?? false
+      );
     },
 
     // Real derivations from the canonical trees (session-memoized), no longer stubs.
@@ -2212,8 +2231,16 @@ export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance {
       // Preserve pending host intent and adopted document modes across author-only changes.
       if (author !== undefined && pendingSuggestingRequest) {
         pendingSuggestingRequest = false;
-        readerChoseMode = true;
-        applyEditingMode('suggesting');
+        const pending = completePendingSuggesting(editingModeRefusal('suggesting'));
+        if (pending.enter) {
+          readerChoseMode = true;
+          applyEditingMode('suggesting');
+        } else {
+          facadeRejection = pending.rejection;
+          bump();
+          emitSelectionChange();
+          return;
+        }
       } else if (!readerChoseMode) {
         const fallback = pendingHostModeFallback ?? editingMode;
         applyHostModeDecision(hostConfig.mode() === undefined ? fallback : 'editing');
