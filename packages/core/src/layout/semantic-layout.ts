@@ -1,3 +1,5 @@
+import { tocLinkRanges, tocLinkStyleToken } from './toc-link-formatting.ts';
+import { tocCodeRanges } from './field-code-toc.ts';
 import { paragraphIsRtl, spanContentX } from './rtl-paragraph.ts';
 import * as sectionPrep from './section-preparation.ts';
 import { emptyParagraphStyleFields } from './empty-paragraph-style.ts';
@@ -415,10 +417,19 @@ export function layoutSemanticDocument(
   // Wrapper-only metadata (alias/tag/lock/…) lives outside flattened paragraph nodes. Fold a
   // fingerprint into the producer so incremental identity reuse cannot keep stale boundaries.
   const controlToken = contentControlContextToken(part);
+  const linkStyleRanges = tocLinkRanges(part);
   const optionsWithControlContext: SemanticLayoutOptions = {
     ...options,
+    fieldCodeRanges: options.showFieldCodes ? tocCodeRanges(part) : undefined,
+    tocLinkStyleRanges: linkStyleRanges,
     displayMode,
-    producer: producerWithControlContext(options.producer, controlToken),
+    producer: producerWithControlContext(
+      producerWithControlContext(
+        options.showFieldCodes ? `${options.producer ?? ''}|field-codes` : options.producer,
+        controlToken
+      ),
+      tocLinkStyleToken(linkStyleRanges)
+    ),
     tocFieldChromeParagraphIds:
       options.tocFieldChromeParagraphIds ?? tocFieldChromeParagraphIds(part),
     emptyTocPlaceholderParagraphIds:
@@ -965,6 +976,8 @@ function layoutBlocksPass(
       ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
       ...(options.projectLink ? { projectLink: options.projectLink } : {}),
       ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+      showFieldCodes: options.showFieldCodes,
+
       ...(options.numberingIndex ? { numberingIndex: options.numberingIndex } : {}),
       inlineDrawingLayout: options.inlineDrawingLayout,
       drawingTokenForParagraph: options.drawingTokenForParagraph,
@@ -1654,6 +1667,9 @@ function layoutBlocksPass(
     compatibilityMode: options.compatibilityMode,
     ...(options.projectLink ? { projectLink: options.projectLink } : {}),
     ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+    showFieldCodes: options.showFieldCodes,
+    fieldCodeRanges: options.fieldCodeRanges,
+    tocLinkStyleRanges: options.tocLinkStyleRanges,
     ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
     // Body flow: page fields in table cells paint a placeholder for document finalize to fill.
     bodyPageFields: bodyPageFieldContext,
@@ -1739,9 +1755,10 @@ function layoutBlocksPass(
     const paragraphId = entry.paragraph.id;
     const keepEmptyTocPlaceholder = emptyTocPlaceholderIds?.has(paragraphId) ?? false;
     const suppressChrome =
-      !keepEmptyTocPlaceholder &&
-      ((tocChromeParagraphIds?.has(paragraphId) ?? false) ||
-        (emptyTocSuppressedResultIds?.has(paragraphId) ?? false));
+      options.fieldCodeRanges?.get(paragraphId)?.some((range) => range.suppressParagraph) ||
+      (!keepEmptyTocPlaceholder &&
+        ((tocChromeParagraphIds?.has(paragraphId) ?? false) ||
+          (emptyTocSuppressedResultIds?.has(paragraphId) ?? false)));
     const available = entry.available;
     const columnX = columnOffsetX();
     const allPageZones = entry.frame
@@ -1802,6 +1819,9 @@ function layoutBlocksPass(
         marginExtent: { left: 0, right: entry.indent.left + available + entry.indent.right },
         ...(options.projectLink ? { projectLink: options.projectLink } : {}),
         ...(options.projectFieldLink ? { projectFieldLink: options.projectFieldLink } : {}),
+        showFieldCodes: options.showFieldCodes,
+        fieldCodeRanges: options.fieldCodeRanges?.get(paragraphId),
+        tocLinkStyleRanges: options.tocLinkStyleRanges?.get(paragraphId),
         ...(options.documentProperties ? { documentProperties: options.documentProperties } : {}),
         // Body flow: an empty-cache page field paints a placeholder finalize substitutes per page.
         bodyPageFields: bodyPageFieldContext,

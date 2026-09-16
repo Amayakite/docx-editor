@@ -136,6 +136,12 @@ export interface SemanticLayoutOptions {
    * result still measures, breaks and paints — it simply is not clickable.
    */
   readonly projectFieldLink?: FieldLinkProjector;
+  /** Field-code inspection projection. @internal */
+  readonly showFieldCodes?: boolean;
+  /** @internal */
+  readonly fieldCodeRanges?: import('./field-code-toc.ts').FieldCodeRanges;
+  /** @internal Word TOC character-style suppression. */
+  readonly tocLinkStyleRanges?: import('./toc-link-formatting.ts').TocLinkRanges;
   /**
    * The document's parsed metadata, for document-property fields (TITLE, AUTHOR, …). Read once
    * by the surface and shared across body, table, note and header/footer flows.
