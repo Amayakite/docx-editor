@@ -28,7 +28,9 @@ export function relevant(path) {
     ) ||
     ['bun.lock', 'package.json', '.changeset/config.json'].includes(path) ||
     /^(scripts\/collaboration\/|\.collaboration\/)/.test(path) ||
-    /^\.github\/workflows\/(ci|release|dependabot-lockfile|collaboration-catalog)\.yml$/.test(path)
+    /^\.github\/workflows\/(ci|release|recover-release|post-release|dependabot-lockfile|collaboration-catalog)\.yml$/.test(
+      path
+    )
   );
 }
 export function changedPaths(base) {
@@ -261,7 +263,7 @@ export function check(base, release = false) {
     );
   }
   const generated = read(GUIDE).match(
-    /<!-- collaboration-releases:start -->[\s\S]*?<!-- collaboration-releases:end -->/
+    /\{\/\* collaboration-releases:start \*\/\}[\s\S]*?\{\/\* collaboration-releases:end \*\/\}/
   )?.[0];
   assert.equal(generated, table(), 'Release table is stale: run collaboration:catalog --table');
   console.log(
