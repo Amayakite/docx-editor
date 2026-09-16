@@ -1,6 +1,14 @@
+import { resolveTocSources } from '../package/toc-sources.ts';
+import { tocRowOmitsPageNumber } from '../package/toc-rows.ts';
+import { sliceTocParagraph } from '../package/toc-result.ts';
 // TOC refresh TreeDocOps — replace result paragraphs / rewrite page-number runs.
 
-import { detectBodyTocs, findDetectedToc, type DetectedToc } from '../package/toc-detect.ts';
+import {
+  detectBodyTocs,
+  findDetectedToc,
+  tocFieldRange,
+  type DetectedToc,
+} from '../package/toc-detect.ts';
 import {
   bookmarkPairNodes,
   buildTocContentControl,
@@ -18,6 +26,7 @@ import {
 import type { OoxmlElement, OoxmlNode, OoxmlPart } from '../package/ooxml-tree.ts';
 import { MAX_INLINE_CONTAINER_DEPTH, nextInlineContainerDepth } from '../package/ooxml-shared.ts';
 import {
+  cloneWithNewIds,
   effectiveContentLockAt,
   effectiveLockOf,
   fromEdit,
@@ -105,6 +114,11 @@ function tocRestriction(part: OoxmlPart, toc: DetectedToc): TreeOpRejection | nu
   for (const nodeId of [toc.beginParagraphId, ...toc.resultParagraphIds, toc.endParagraphId]) {
     if (isBoundAt(part, nodeId)) return 'bound';
     if (effectiveContentLockAt(part, nodeId).content) return 'locked';
+    const paragraph = findNode(part, nodeId);
+    if (paragraph && paragraph.kind !== 'textValue' && toc.resultParagraphIds.includes(nodeId)) {
+      const nested = resultControlRestriction(part, sliceTocParagraph(paragraph, toc, 'result'));
+      if (nested) return nested;
+    }
   }
   if (toc.contentControlId) {
     const control = findNode(part, toc.contentControlId);
@@ -117,6 +131,34 @@ function tocRestriction(part: OoxmlPart, toc: DetectedToc): TreeOpRejection | nu
   return null;
 }
 
+function resultControlRestriction(
+  part: OoxmlPart,
+  node: OoxmlNode,
+  depth = 0
+): TreeOpRejection | null {
+  if (node.kind === 'textValue') return null;
+  if (depth >= MAX_INLINE_CONTAINER_DEPTH) return 'invalidArgs';
+  if (isContentControlNode(node)) {
+    if (isBoundAt(part, node.id)) return 'bound';
+    if (effectiveContentLockAt(part, node.id).content) return 'locked';
+  }
+  const next = nextInlineContainerDepth(node, depth);
+  for (const child of node.children) {
+    const rejected = resultControlRestriction(part, child, next);
+    if (rejected) return rejected;
+  }
+  return null;
+}
+
+/** A full result replacement cannot retain nested controls, including inline controls. */
+function resultContainsControl(node: OoxmlNode, depth = 0): boolean {
+  if (node.kind === 'textValue') return false;
+  if (isContentControlNode(node)) return true;
+  if (depth >= MAX_INLINE_CONTAINER_DEPTH) return true;
+  const next = nextInlineContainerDepth(node, depth);
+  return node.children.some((child) => resultContainsControl(child, next));
+}
+
 export function validateReplaceTocResult(
   part: OoxmlPart,
   op: ReplaceTocResultOp
@@ -126,6 +168,21 @@ export function validateReplaceTocResult(
   if (input) return input;
   const toc = findDetectedToc(detectBodyTocs(part), op.tocId);
   if (!toc) return 'unknown-block';
+  const range = tocFieldRange(toc);
+  const container = findNode(part, toc.containerId);
+  if (!range || !container || container.kind === 'textValue') return 'invalidArgs';
+  const start = container.children.findIndex((node) => node.id === range.separateParagraphId);
+  const end = container.children.findIndex((node) => node.id === toc.endParagraphId);
+  if (start < 0 || end < start) return 'invalidArgs';
+  // A block replacement cannot retain tables, controls, or section boundaries inside
+  // the result. Refuse these shapes before inserting bookmarks or deleting content.
+  for (const node of container.children.slice(start, end + 1)) {
+    if (node.kind !== 'paragraph') return 'invalidArgs';
+    if (resultContainsControl(sliceTocParagraph(node, toc, 'result'))) return 'invalidArgs';
+    if (node.id === toc.endParagraphId) continue;
+    const properties = node.children.find((child) => child.kind === 'paragraphProperties');
+    if (properties?.children.some((child) => child.localName === 'sectPr')) return 'invalidArgs';
+  }
   return tocRestriction(part, toc);
 }
 
@@ -203,9 +260,11 @@ function replaceResultParagraphs(
   if (!container || container.kind === 'textValue') {
     return { ok: false, reason: 'unknown-block' };
   }
-  const beginIdx = container.children.findIndex((child) => child.id === toc.beginParagraphId);
+  const range = tocFieldRange(toc);
+  if (!range) return { ok: false, reason: 'unknown-block' };
+  const beginIdx = container.children.findIndex((child) => child.id === range.separateParagraphId);
   const endIdx = container.children.findIndex((child) => child.id === toc.endParagraphId);
-  if (beginIdx < 0 || endIdx < 0 || endIdx <= beginIdx) {
+  if (beginIdx < 0 || endIdx < 0 || endIdx < beginIdx) {
     return { ok: false, reason: 'invalidArgs' };
   }
 
@@ -227,7 +286,12 @@ function replaceResultParagraphs(
     if (style?.kind === 'textValue') continue;
     const styleId = style?.attributes.find((attribute) => attribute.localName === 'val')?.value;
     if (styleId?.startsWith('TOC') && !propertiesByStyle.has(styleId)) {
-      propertiesByStyle.set(styleId, properties);
+      propertiesByStyle.set(styleId, {
+        ...properties,
+        children: properties.children.filter(
+          (child) => child.kind === 'textValue' || child.localName !== 'sectPr'
+        ),
+      } as OoxmlNode);
     }
   }
   const mint = createNodeIdAllocator(part);
@@ -235,17 +299,63 @@ function replaceResultParagraphs(
     const styleId = `TOC${Math.min(entry.level + 1, 9)}`;
     return buildTocEntryParagraph(mint, entry, toc.instruction, propertiesByStyle.get(styleId));
   });
+  const begin = container.children[beginIdx] as OoxmlElement;
+  const end = container.children[endIdx] as OoxmlElement;
+  let prefix = sliceTocParagraph(begin, toc, 'before');
+  const suffixSlice = sliceTocParagraph(end, toc, 'after');
+  // One paragraph/run may own both markers. Its two halves cannot share node ids.
+  let suffix = beginIdx === endIdx ? cloneWithNewIds(suffixSlice, mint) : suffixSlice;
+  if (beginIdx === endIdx && suffix.kind !== 'textValue') {
+    // Paragraph identities cannot occur twice in the saved document. The section
+    // mark belongs to the final half, just as it does after an ordinary split.
+    suffix = {
+      ...suffix,
+      attributes: suffix.attributes.filter(
+        (attr) => attr.localName !== 'paraId' && attr.localName !== 'textId'
+      ),
+    } as OoxmlNode;
+    prefix = {
+      ...prefix,
+      children: prefix.children.map((child) =>
+        child.kind === 'paragraphProperties'
+          ? ({
+              ...child,
+              children: child.children.filter((property) => property.localName !== 'sectPr'),
+            } as OoxmlNode)
+          : child
+      ),
+    } as OoxmlElement;
+  }
+  // Word places the first generated entry beside the separator. Keeping a standalone
+  // prefix paragraph inserts a blank line above every refreshed TOC.
+  const firstEntry = newEntries.shift();
+  if (firstEntry && firstEntry.kind !== 'textValue') {
+    const isProperties = (node: OoxmlNode) => node.kind === 'paragraphProperties';
+    prefix = {
+      ...prefix,
+      children: [
+        ...firstEntry.children.filter(isProperties),
+        ...prefix.children.filter((node) => !isProperties(node)),
+        ...firstEntry.children.filter((node) => !isProperties(node)),
+      ],
+    } as OoxmlElement;
+  }
   const nextChildren = [
-    ...container.children.slice(0, beginIdx + 1),
+    ...container.children.slice(0, beginIdx),
+    prefix,
     ...newEntries,
-    ...container.children.slice(endIdx),
+    suffix,
+    ...container.children.slice(endIdx + 1),
   ];
-  const deleted = toc.resultParagraphIds;
-  const created = newEntries.map((node) => node.id);
+  const deleted = container.children.slice(beginIdx + 1, endIdx).map((node) => node.id);
+  const created = [
+    ...newEntries.map((node) => node.id),
+    ...(beginIdx === endIdx ? [suffix.id] : []),
+  ];
   const replaced = replaceChildren(part, container.id, nextChildren, options);
   if (!replaced.ok) return { ok: false, reason: 'tree-invariant' };
   const effect: TreeOpEffect = {
-    dirty: [toc.beginParagraphId, toc.endParagraphId, ...created],
+    dirty: [toc.beginParagraphId, range.separateParagraphId, toc.endParagraphId, ...created],
     created,
     deleted,
     dependencyKeys: [toc.containerId],
@@ -320,7 +430,9 @@ export function applyReplaceTocResult(
 function rewritePageNumberInParagraph(
   paragraph: OoxmlElement,
   pageNumberText: string,
-  mint: () => string
+  mint: () => string,
+  toc: DetectedToc,
+  omitsPageNumber: boolean
 ): OoxmlElement | null {
   // Find text nodes inside hyperlink or direct runs; replace the last w:t.
   const texts: OoxmlNode[] = [];
@@ -338,8 +450,8 @@ function rewritePageNumberInParagraph(
     const childDepth = nextInlineContainerDepth(node, depth);
     for (const child of node.children) walk(child, childDepth);
   };
-  walk(paragraph, 0);
-  if (!hasPageTab || texts.length < 2) return null;
+  walk(sliceTocParagraph(paragraph, toc, 'result'), 0);
+  if (!hasPageTab || texts.length < 2 || omitsPageNumber) return null;
   const target = texts[texts.length - 1]!;
   if (target.kind === 'textValue') return null;
   const targetId = target.id;
@@ -372,6 +484,15 @@ export function applyRewriteTocPageNumbers(
   const toc = findDetectedToc(detectBodyTocs(part), op.tocId);
   if (!toc) return { ok: false, reason: 'unknown-block' };
 
+  const sources = resolveTocSources(part, [], toc.instruction) ?? [];
+  if (toc.instruction.omitPageNumbers)
+    return ok(part, {
+      dirty: [],
+      created: [],
+      deleted: [],
+      dependencyKeys: [],
+      impact: 'text-local',
+    });
   let current = part;
   const mint = createNodeIdAllocator(current);
   const dirty: string[] = [];
@@ -383,7 +504,9 @@ export function applyRewriteTocPageNumbers(
     const rewritten = rewritePageNumberInParagraph(
       paragraph as OoxmlElement,
       update.pageNumberText,
-      mint
+      mint,
+      toc,
+      tocRowOmitsPageNumber(current, sliceTocParagraph(paragraph, toc, 'result'), sources)
     );
     if (!rewritten) continue;
     const parent = parentOf(current, paragraph.id);
