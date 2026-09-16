@@ -239,6 +239,12 @@
       "id": 251161311,
       "signed_at": "2026-09-14T09:10:10Z",
       "pull_request_no": 818
+    },
+    {
+      "name": "sallasia-tribus",
+      "id": 120402049,
+      "signed_at": "2026-09-16T09:03:29Z",
+      "pull_request_no": 839
     }
   ]
 }
