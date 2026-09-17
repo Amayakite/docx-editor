@@ -1794,6 +1794,7 @@ export interface LineRecord {
     readonly baseline: number;
     // (undocumented)
     readonly box: LayoutBox;
+    readonly changeSites?: readonly RevisionAttribution[];
     readonly contentX: number;
     readonly deletedRanges?: readonly ModelRange[];
     readonly drawings?: readonly InlineDrawingRecord[];
@@ -2467,6 +2468,7 @@ export interface ParagraphFragmentRecord {
     readonly kind: 'paragraph';
     // (undocumented)
     readonly lines: readonly LineRecord[];
+    readonly markChangeSites?: readonly RevisionAttribution[];
     readonly marker?: ListMarkerRecord;
     readonly markFormatRevision?: RevisionAttribution;
     // @deprecated
@@ -3225,6 +3227,7 @@ export interface RevisionFilter {
     readonly includes?: (revision: RevisionAttribution) => boolean;
     // (undocumented)
     readonly includesNode?: (nodeId: string, author: string) => boolean;
+    readonly resolvedMarkup?: 'plain';
 }
 
 // @public
@@ -3686,6 +3689,7 @@ export interface SemanticTableRow {
     readonly cantSplit: boolean;
     // (undocumented)
     readonly cells: readonly SemanticTableCell[];
+    readonly changeSites?: readonly RevisionAttribution[];
     readonly height: TableRowHeight;
     // (undocumented)
     readonly id: string;
@@ -4097,6 +4101,7 @@ export interface StyleSpanRecord {
     // (undocumented)
     readonly box: LayoutBox;
     readonly caretEdges?: readonly number[];
+    readonly changeSites?: readonly RevisionAttribution[];
     readonly equation?: EquationSpanRecord;
     readonly fieldAtom?: FieldAtomMarker;
     readonly fontSlot?: FontSlot;
@@ -4296,6 +4301,7 @@ export interface TableRowFragmentRecord {
     readonly box: LayoutBox;
     // (undocumented)
     readonly cells: readonly TableCellFragmentRecord[];
+    readonly changeSites?: readonly RevisionAttribution[];
     readonly id: string;
     readonly isContinuation?: boolean;
     readonly isHeaderRepeat: boolean;
