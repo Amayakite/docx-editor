@@ -210,3 +210,10 @@ export {
   type RevisionBatchResult,
   type RevisionBatchSkipReason,
 } from './revision-batch.ts';
+export type { HistoryGroup } from './history-group.ts';
+
+export {
+  observeHistoryGroup,
+  reportHistoryGroup,
+  type HistoryCaptureKind,
+} from './history-group.ts';

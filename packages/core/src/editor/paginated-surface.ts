@@ -246,6 +246,7 @@ import { createNoteOps } from './surface-note-ops.ts';
 import { notePropertiesStateOf, notePreviewTextOf } from './surface-note-state.ts';
 import { createDerivationPrewarmSteps, scheduleDerivationPrewarm } from './derivation-prewarm.ts';
 import { runWithTransactionActor } from '../store/package/actor-scoped-ids.ts';
+import { CommitHistoryGroup, runWithHistoryGroup } from './history-group-scope.ts';
 import { settingsPartOf } from '../store/package/note-properties.ts';
 import { resolveNotesPart } from '../store/package/note-references.ts';
 import type { OoxmlPart } from '../store/package/ooxml-tree.ts';
@@ -539,6 +540,7 @@ export function mountPaginatedSurface(
   /** Sibling of `selection`: rectangle of table cells, or null for ordinary text. */
   let cellSelection: CellSelection | null = null;
   let lastRejection: string | null = null;
+  const commitHistoryGroup = new CommitHistoryGroup();
   const AUTHOR_WRITE_REFUSAL = 'suggesting needs an author before it can propose a change';
   /** Show-all content-control boundary chrome — surface furniture, never a layout input. */
   let showAllContentControls = false;
@@ -1394,8 +1396,10 @@ export function mountPaginatedSurface(
     typeBuffer = '';
     flushingTypeBuffer = true;
     try {
-      // `surface` is assigned below; a flush can only run once a caller holds it.
-      surface.type(text);
+      // `surface` is assigned below; a flush can only run once a caller holds it. The
+      // keystrokes are their own undo step: a flush at the head of a grouped command must
+      // not fold them into that command's gesture.
+      runWithHistoryGroup(surface, undefined, () => surface.type(text));
     } catch (error) {
       // A throwing commit must not eat the keystrokes: put them back (ahead of
       // anything enqueued meanwhile, preserving order) for the next flush point.
@@ -2936,6 +2940,9 @@ export function mountPaginatedSurface(
       };
     }
     collaborationOperationCounter += 1;
+    // The group of the commit in flight, if any: it travels with the transaction into local
+    // history and, through the journal, to the collaboration undo authority.
+    const historyGroup = commitHistoryGroup.value;
     return session.applyTreeOps(
       ops,
       selectionBefore,
@@ -2948,8 +2955,9 @@ export function mountPaginatedSurface(
             actorId: collaborationSession.identity.actorId,
             operationId: `${collaborationSession.identity.actorId}:${collaborationSession.sessionId}:browser:${collaborationOperationCounter}`,
             recordsHistory: false,
+            historyGroup,
           }
-        : { packageEdits }
+        : { packageEdits, historyGroup }
     );
   }
 
@@ -3243,7 +3251,9 @@ export function mountPaginatedSurface(
     // Ops go through the session, so the tree stays the only state. A refusal is surfaced
     // rather than silently dropped: the view is repainted from what the model actually
     // holds, so the user never keeps looking at an edit that will not be saved.
-    const result = run();
+    const result = commitHistoryGroup.around(surface, run, (r) =>
+      typeof r === 'boolean' ? r : r.committed
+    );
     const rejection = typeof result === 'boolean' || !result.rejected ? null : result;
     if (rejection) {
       lastRejection = writeRejectionReason(
