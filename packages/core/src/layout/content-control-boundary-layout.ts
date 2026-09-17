@@ -434,9 +434,10 @@ function pageContribution(
           0,
           line.box.height - line.leading - (line.trailingSpacing ?? 0)
         );
+        const lineSpans: PlacedSpanBox[] = [];
         for (const span of line.spans) {
           work && (work.geometryEntries += 1);
-          spans.push({
+          lineSpans.push({
             pageIndex,
             paragraphId: span.range.paragraphId,
             start: span.range.start,
@@ -450,6 +451,22 @@ function pageContribution(
             },
           });
         }
+        // An inline drawing occupies one model unit and no span, and it can be a control's
+        // whole content (a picture control). Its painted bounds stand in for the span it does
+        // not have, merged in offset order so the paragraph's run stays ascending.
+        for (const drawing of line.drawings ?? []) {
+          work && (work.geometryEntries += 1);
+          lineSpans.push({
+            pageIndex,
+            paragraphId: drawing.paragraphId,
+            start: drawing.start,
+            end: drawing.start + 1,
+            line: lineKey,
+            box: shift(drawing.paintBounds),
+          });
+        }
+        if (line.drawings?.length) lineSpans.sort((a, b) => a.start - b.start || a.end - b.end);
+        for (const entry of lineSpans) spans.push(entry);
       }
       return;
     }
@@ -597,6 +614,14 @@ function fragmentsForInlineControl(
       if (range.start > span.end) continue;
       if (seenPages.has(span.pageIndex)) continue;
       seenPages.add(span.pageIndex);
+      // A zero-width projected span AT the insertion point is the control's own glyph (a
+      // `w:sym` checkbox state owns no model text but paints a box): its painted box is the
+      // control's geometry, so the widget can hug the glyph instead of a hairline beside it.
+      if (span.start === span.end && span.start === range.start && span.box.width > 0) {
+        carets.push({ pageIndex: span.pageIndex, box: span.box });
+        if (!repeated) break;
+        continue;
+      }
       const x =
         span.start === span.end
           ? span.box.x

@@ -1,3 +1,6 @@
+import { armContentControlMenuDismiss } from './content-control-widget-dismiss.ts';
+import { contentControlMenuAnchor } from './content-control-widget-anchor.ts';
+import { contentControlWidgetValue } from './content-control-widget-session.ts';
 import { createFormFieldShading } from './surface-form-field-shading.ts';
 import {
   FIELD_CODE_INPUT_REFUSAL,
@@ -23,15 +26,32 @@ import {
 import { registerSurfaceMeasurement } from './surface-measurement.ts';
 import {
   createContentControlWidgetSessions,
+  contentControlValueOps,
   contentControlWidgetItems,
   contentControlWidgetDate,
 } from './content-control-widget-session.ts';
+import { createContentControlPictureWidget } from './content-control-picture-widget.ts';
+import {
+  insertOwnerOf,
+  promptInsertionLanding,
+  typedInsertText,
+} from './content-control-prompt-landing.ts';
+import { createContentControlHover } from './content-control-hover.ts';
+import { contentControlAtSelection } from './content-control-at-selection.ts';
 import { collapseHorizontalSelection as collapseSelection } from './surface-selection-collapse.ts';
 import { createParagraphMarkVisibility } from './surface-paragraph-mark-visibility.ts';
 import { saveSurfaceDocument } from './docx-editor-save.ts';
 import { applyTextFormOperation, applyTextFormSave } from './surface-text-form-apply.ts';
 import { beginSurfaceCommit } from './surface-commit-state.ts';
 import { createSurfaceDateLocale } from './surface-date-locale.ts';
+import {
+  buildContentControlCalendar,
+  buildContentControlListMenu,
+  focusContentControlCalendar,
+  placeContentControlMenu,
+  type ContentControlMenuHost,
+} from './content-control-widget-menu.ts';
+import { createLegacyCheckboxInteraction } from './surface-legacy-checkbox.ts';
 import {
   createTextFormFieldInteraction,
   type PendingTextFormInput,
@@ -90,7 +110,6 @@ import {
   selectionRects,
   caretAt,
   cellSelectionText,
-  contentControlAtSemantic,
   contentControlHoldingParagraph,
   contentControlRecordsInPart,
   contentControlsInLayout,
@@ -211,7 +230,11 @@ import {
   mergedMultiSettingProperty,
   type SurfaceProperty,
 } from './surface-formatting.ts';
-import { createPointerController, type PointerController } from './surface-pointer.ts';
+import {
+  absorbPlaceholderControls,
+  createPointerController,
+  type PointerController,
+} from './surface-pointer.ts';
 import { createReviewViewState } from './surface-review-view.ts';
 import { selectionsEqual } from './dom-selection.ts';
 import { createSurfaceSelectionSync } from './surface-selection-sync.ts';
@@ -540,6 +563,19 @@ export function mountPaginatedSurface(
   /** Sibling of `selection`: rectangle of table cells, or null for ordinary text. */
   let cellSelection: CellSelection | null = null;
   let lastRejection: string | null = null;
+  /**
+   * Publish an early-return refusal. It does not EMIT: the facade treats a publish that moves
+   * neither the selection nor the pending format as quiet, which a refusal is. What it does
+   * do is invalidate the version-cached `snapshot()`, so the reason is there the moment
+   * anyone reads it. Stored alone it was not — the snapshot kept its stale value until an
+   * unrelated tick bumped the version, and then delivered a section break's message on a
+   * caret move. Returns false so a refusing command can `return publishRefusal(reason)`.
+   */
+  function publishRefusal(reason: string): false {
+    lastRejection = reason;
+    options.onChange?.(currentState());
+    return false;
+  }
   const commitHistoryGroup = new CommitHistoryGroup();
   const AUTHOR_WRITE_REFUSAL = 'suggesting needs an author before it can propose a change';
   /** Show-all content-control boundary chrome — surface furniture, never a layout input. */
@@ -1079,16 +1115,7 @@ export function mountPaginatedSurface(
     // its corners in document order.
     selectedCells: () => cellSelection?.cellIds,
     editingMode: () => editingMode,
-    publishRefusal: (reason) => {
-      lastRejection = reason;
-      // Published like every other early-return refusal in this file. It does not EMIT: the
-      // facade treats a publish that moves neither the selection nor the pending format as
-      // quiet, which a refusal is. What it does do is invalidate the version-cached
-      // `snapshot()`, so the reason is there the moment anyone reads it. Stored alone it was
-      // not — the snapshot kept its stale value until an unrelated tick bumped the version,
-      // and then delivered a section break's message on a caret move.
-      options.onChange?.(currentState());
-    },
+    publishRefusal,
     // RAW, on purpose: `orderedRange()` flushes pending input, and this is asked from `can`.
     caretParagraphId: () =>
       selection.anchor.paragraphId === selection.head.paragraphId &&
@@ -1239,6 +1266,7 @@ export function mountPaginatedSurface(
   pagesLayer.addEventListener('click', onTocRowClick);
   pagesLayer.addEventListener('pointermove', onTocPointerMove);
   pagesLayer.addEventListener('pointerleave', onTocPointerLeave);
+  const controlHover = createContentControlHover(pagesLayer);
   let desiredX: number | null = null;
   function layoutDocument(
     revision: number,
@@ -1426,27 +1454,17 @@ export function mountPaginatedSurface(
   ): boolean {
     flushTypeBuffer();
     const writer = authorOverride?.trim() || author?.trim();
-    if (!writer) {
-      lastRejection = 'tracked changes need a non-empty author';
-      options.onChange?.(currentState());
-      return false;
-    }
+    if (!writer) return publishRefusal('tracked changes need a non-empty author');
     // Empty text would commit a phantom `w:ins` holding nothing — a tracked change the
     // review pane must carry with no content to show. A replacement that only removes is
     // a deletion. A newline is not a paragraph mark: written into `w:t` it renders as
     // whitespace while claiming to be a break. The facade's support gate refuses the same
     // SHAPES (docx-editor-support.ts), so the automation `can` and this `exec` agree; the
     // messages differ only in naming the kind versus the command.
-    if (kind !== 'deletion' && text.length === 0) {
-      lastRejection = `${kind} requires non-empty text`;
-      options.onChange?.(currentState());
-      return false;
-    }
-    if (kind !== 'deletion' && /[\r\n\v\f\u2028\u2029]/.test(text)) {
-      lastRejection = `${kind} requires text without a paragraph mark`;
-      options.onChange?.(currentState());
-      return false;
-    }
+    if (kind !== 'deletion' && text.length === 0)
+      return publishRefusal(`${kind} requires non-empty text`);
+    if (kind !== 'deletion' && /[\r\n\v\f\u2028\u2029]/.test(text))
+      return publishRefusal(`${kind} requires text without a paragraph mark`);
     const revision = { author: writer, date: trackedDate() };
     const range = orderedRange();
     const collapsed =
@@ -1455,11 +1473,8 @@ export function mountPaginatedSurface(
     // covers a cell the user selected — the keyboard replaces over it, so automation must.
     // REPLACEMENT only: it always carries its insert op. A deletion over an all-empty
     // rectangle would commit zero ops, so it keeps the refusal `can` gives it.
-    if (kind !== 'insertion' && collapsed && !(kind === 'replacement' && cellSelection)) {
-      lastRejection = `${kind} needs a non-collapsed selection`;
-      options.onChange?.(currentState());
-      return false;
-    }
+    if (kind !== 'insertion' && collapsed && !(kind === 'replacement' && cellSelection))
+      return publishRefusal(`${kind} needs a non-collapsed selection`);
     // The deletion is tracked whatever the surface's editing mode is, so the plan computes
     // `replaceAt` as suggesting would — for THIS author, who may not be the configured one.
     // An insertion aimed INSIDE an existing deletion relocates past it in the store; the
@@ -1881,13 +1896,7 @@ export function mountPaginatedSurface(
   }
 
   function resolveBodyContentControlAtCaret(): ContentControlBoundaryRecord | null {
-    const caret = caretAt(currentLayout, selection.head, measurer);
-    if (!caret) return null;
-    const found = contentControlAtSemantic(currentLayout, {
-      x: caret.x,
-      y: caret.y + caret.height / 2,
-      pageIndex: caret.pageIndex,
-    });
+    const found = contentControlAtSelection(currentLayout, selection, measurer);
     // Belt and braces: the records are the body's, so a match from another part is a bug in
     // the index rather than an answer, and must not become a write.
     if (!found) return null;
@@ -2084,7 +2093,8 @@ export function mountPaginatedSurface(
     return true;
   }
 
-  const listItemsOfControl = (id: string) => contentControlWidgetItems(findControl(id));
+  const listItemsOfControl = (id: string) =>
+    contentControlWidgetItems(findControl(id), () => session.currentPackage());
 
   function checkboxChecked(controlId: string): boolean {
     const control = findControl(controlId);
@@ -2119,70 +2129,59 @@ export function mountPaginatedSurface(
     }
   }
 
+  const pictureWidget = createContentControlPictureWidget({
+    document,
+    layer: pagesLayer,
+    find: findControl,
+    layout: () => currentLayout,
+    selectDrawing: (drawingNodeId, paragraphId) =>
+      surface.selectDrawing(drawingNodeId, paragraphId),
+    allowed: (id) => !contentControlsOps.disabledReason(id, 'edit'),
+    translate: (key) => translate?.(key) ?? key,
+    replaceImage: (drawingNodeId, bytes, mime, commitGuard) =>
+      surface.replaceImage(drawingNodeId, bytes, mime, {
+        expectedPackageRevision: session.packageRevision(),
+        commitGuard,
+      }),
+    setOpen: setContentControlWidgetOpen,
+    reject: publishRefusal,
+  });
+
   const widgetSessions = createContentControlWidgetSessions({
     find: findControl,
     allowed: (id) => !contentControlsOps.disabledReason(id, 'edit'),
     apply: (id, value) => contentControlsOps.setValue(id, value),
     items: listItemsOfControl,
     date: dateValueOfControl,
+    checked: checkboxChecked,
+    picture: pictureWidget.drawingOf,
+    replaceImage: pictureWidget.replace,
+    locale: () => dateLocale.get(),
     layer: pagesLayer,
     setOpen: setContentControlWidgetOpen,
     request: options.onRequestContentControlWidget,
   });
 
+  let activeContentControlMenu: HTMLElement | null = null;
+  let stopContentControlMenuDismiss: (() => void) | undefined;
   function closeContentControlMenu(menu: HTMLElement): void {
+    if (activeContentControlMenu === menu) {
+      activeContentControlMenu = null;
+      stopContentControlMenuDismiss?.();
+      stopContentControlMenuDismiss = undefined;
+    }
     const controlId = menu.dataset.docxCcId;
+    const restoreFocus = menu.contains(document.activeElement);
     menu.remove();
     if (controlId) setContentControlWidgetOpen(controlId, false);
+    if (restoreFocus) pagesLayer.focus({ preventScroll: true });
   }
 
   function removeExistingContentControlMenu(): HTMLElement | null {
     widgetSessions.cancel();
-    const existing = pagesLayer.querySelector<HTMLElement>('.docx-content-control-menu');
+    const existing = activeContentControlMenu;
     if (existing) closeContentControlMenu(existing);
     return existing;
-  }
-
-  /**
-   * Dismiss a widget menu on an outside press or Escape.
-   *
-   * `pointerdown`, not `mousedown`: the surface prevents the default on every page press,
-   * which suppresses the compatibility `mousedown` — a `mousedown` listener never fires for
-   * document clicks and the menu stands. The opening press cannot self-dismiss: it already
-   * passed document capture before this attached. A press on the owning widget is left for
-   * the opener, which toggles instead. Stale listeners (the menu closed through a commit)
-   * clean up silently so a later Escape still reaches the rest of the UI.
-   */
-  function armContentControlMenuDismiss(menu: HTMLElement, onOutsidePress: () => void): void {
-    const controlId = menu.dataset.docxCcId;
-    const cleanup = (): void => {
-      document.removeEventListener('pointerdown', onOutside, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-    const onOutside = (event: Event): void => {
-      if (menu.parentNode === null) {
-        cleanup();
-        return;
-      }
-      const target = event.target as Element | null;
-      const widget = target instanceof Element ? target.closest('[data-docx-cc-widget]') : null;
-      if (
-        target &&
-        (menu.contains(target) || widget?.getAttribute('data-docx-cc-id') === controlId)
-      )
-        return;
-      cleanup();
-      onOutsidePress();
-    };
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
-      cleanup();
-      if (menu.parentNode === null) return;
-      event.stopPropagation();
-      closeContentControlMenu(menu);
-    };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey, true);
   }
 
   /**
@@ -2238,6 +2237,14 @@ export function mountPaginatedSurface(
     navigation.goToPosition({ paragraphId: headingParagraphId, offset: 0 });
   }
 
+  const contentControlMenuHost: ContentControlMenuHost = {
+    document,
+    locale: () => dateLocale.get(),
+    translate: (key) => translate?.(key) ?? key,
+    setValue: (controlId, value) => contentControlsOps.setValue(controlId, value),
+    close: (menu) => closeContentControlMenu(menu),
+  };
+
   function openContentControlWidget(controlId: string, kind: string): void {
     const reason = contentControlsOps.disabledReason(controlId, 'edit');
     if (reason) {
@@ -2245,237 +2252,66 @@ export function mountPaginatedSurface(
       options.onChange?.(currentState());
       return;
     }
+    pictureWidget.cancel();
+    // Re-pressing the native widget toggles its current menu shut.
+    if (removeExistingContentControlMenu()?.dataset.docxCcId === controlId) return;
+    // A picture press selects the picture first, as in Word, so the host's image commands
+    // address it whichever renderer takes the pick.
+    if (kind === 'picture') pictureWidget.select(controlId);
+    // A host renderer that took the session owns the interaction — for a checkbox too, so a
+    // host can confirm, refuse or restyle a toggle instead of only watching it land.
+    if (widgetSessions.open(controlId, kind)) return;
+    if (kind === 'picture') return pictureWidget.pick(controlId);
     if (kind === 'checkbox') {
       contentControlsOps.setValue(controlId, checkboxChecked(controlId) ? 'false' : 'true');
       return;
     }
-    // Re-pressing the native widget toggles its current menu shut.
-    if (removeExistingContentControlMenu()?.dataset.docxCcId === controlId) return;
-    if (widgetSessions.open(controlId, kind)) return;
-    if (kind === 'dropdown' || kind === 'comboBox') {
+    const alias = contentControlsInLayout(currentLayout).find((c) => c.id === controlId)?.alias;
+    let menu: HTMLElement;
+    if (kind === 'dropdown' || kind === 'comboBox' || kind === 'buildingBlockGallery') {
       const items = listItemsOfControl(controlId);
       if (items.length === 0 && kind === 'dropdown') return;
-      // Engine-level menu: no hardcoded English — displayText comes from the file.
-      const menu = document.createElement('div');
-      menu.className = 'docx-content-control-menu';
-      menu.dataset.docxMarker = '';
-      menu.dataset.docxCcId = controlId;
-      menu.setAttribute('contenteditable', 'false');
-      menu.setAttribute('role', 'listbox');
-      menu.style.position = 'absolute';
-      menu.style.zIndex = '20';
-      menu.style.pointerEvents = 'auto';
-      menu.addEventListener('pointerdown', (event) => event.stopPropagation());
-      const record = contentControlsInLayout(currentLayout).find((c) => c.id === controlId);
-      const frag = record?.fragments[0];
-      if (frag) {
-        const page = currentLayout.pages[frag.pageIndex];
-        const offsetX = materializedExtent?.pageOffsetX.get(frag.pageIndex) ?? 0;
-        if (page) {
-          const contentLeft = page.contentBox.x - page.box.x;
-          const contentTop = page.contentBox.y - page.box.y;
-          menu.style.left = `${(page.box.x + offsetX + contentLeft + frag.box.x + frag.box.width) * scale}px`;
-          menu.style.top = `${(page.box.y + contentTop + frag.box.y + frag.box.height) * scale}px`;
-          menu.style.transform = 'translateX(-100%)';
-        }
-      }
-      for (const item of items) {
-        const option = document.createElement('button');
-        option.type = 'button';
-        option.className = 'docx-content-control-menu-item';
-        option.dataset.docxMarker = '';
-        option.setAttribute('contenteditable', 'false');
-        option.setAttribute('role', 'option');
-        option.textContent = item.displayText;
-        option.addEventListener('mousedown', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          closeContentControlMenu(menu);
-          contentControlsOps.setValue(controlId, item.value);
-        });
-        menu.append(option);
-      }
-      if (kind === 'comboBox') {
-        const free = document.createElement('input');
-        free.type = 'text';
-        free.className = 'docx-content-control-menu-input';
-        free.dataset.docxMarker = '';
-        free.setAttribute('contenteditable', 'false');
-        free.addEventListener('mousedown', (event) => event.stopPropagation());
-        free.addEventListener('keydown', (event) => {
-          if (event.key !== 'Enter') return;
-          event.preventDefault();
-          closeContentControlMenu(menu);
-          contentControlsOps.setValue(controlId, free.value);
-        });
-        menu.append(free);
-      }
-      pagesLayer.append(menu);
-      setContentControlWidgetOpen(controlId, true);
-      armContentControlMenuDismiss(menu, () => closeContentControlMenu(menu));
+      menu = buildContentControlListMenu(
+        contentControlMenuHost,
+        controlId,
+        kind,
+        items,
+        alias,
+        contentControlWidgetValue(findControl(controlId), items)
+      );
+    } else if (kind === 'date') {
+      menu = buildContentControlCalendar(
+        contentControlMenuHost,
+        controlId,
+        dateValueOfControl(controlId),
+        alias
+      );
+    } else {
       return;
     }
-    if (kind === 'date') {
-      const menu = document.createElement('div');
-      menu.className = 'docx-content-control-menu';
-      menu.dataset.docxMarker = '';
-      menu.dataset.docxCcId = controlId;
-      menu.setAttribute('contenteditable', 'false');
-      menu.style.position = 'absolute';
-      menu.style.zIndex = '20';
-      menu.style.pointerEvents = 'auto';
-      menu.addEventListener('pointerdown', (event) => event.stopPropagation());
-      const record = contentControlsInLayout(currentLayout).find((c) => c.id === controlId);
-      const frag = record?.fragments[0];
-      if (frag) {
-        const page = currentLayout.pages[frag.pageIndex];
-        const offsetX = materializedExtent?.pageOffsetX.get(frag.pageIndex) ?? 0;
-        if (page) {
-          const contentLeft = page.contentBox.x - page.box.x;
-          const contentTop = page.contentBox.y - page.box.y;
-          menu.style.left = `${(page.box.x + offsetX + contentLeft + frag.box.x + frag.box.width) * scale}px`;
-          menu.style.top = `${(page.box.y + contentTop + frag.box.y + frag.box.height) * scale}px`;
-          menu.style.transform = 'translateX(-100%)';
-        }
-      }
-      menu.classList.add('docx-content-control-calendar');
-      const authoredDate = dateValueOfControl(controlId);
-      const parsedDate = authoredDate ? new Date(authoredDate) : new Date();
-      const selectedDate = Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
-      const initialDate = selectedDate ?? new Date();
-      let viewYear = initialDate.getFullYear();
-      let viewMonth = initialDate.getMonth();
-      const monthFormatter = new Intl.DateTimeFormat(undefined, {
-        month: 'long',
-        year: 'numeric',
-      });
-      const dayFormatter = new Intl.DateTimeFormat(undefined, {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-      const weekdayFormatter = new Intl.DateTimeFormat(undefined, { weekday: 'narrow' });
-      const isoDate = (date: Date): string =>
-        `${date.getFullYear().toString().padStart(4, '0')}-${(date.getMonth() + 1)
-          .toString()
-          .padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`;
-      const sameDay = (left: Date, right: Date): boolean =>
-        left.getFullYear() === right.getFullYear() &&
-        left.getMonth() === right.getMonth() &&
-        left.getDate() === right.getDate();
-      let commitPendingManualDate: (() => boolean) | null = null;
-      const renderCalendar = (): void => {
-        const manual = document.createElement('input');
-        manual.type = 'date';
-        manual.className = 'docx-content-control-calendar-input';
-        manual.value = selectedDate ? isoDate(selectedDate) : '';
-        const initialManualValue = manual.value;
-        if (record?.alias) manual.setAttribute('aria-label', record.alias);
-        const commitManualDate = (): boolean => {
-          if (!manual.value || manual.value === initialManualValue) return false;
-          const value = manual.value;
-          closeContentControlMenu(menu);
-          contentControlsOps.setValue(controlId, value);
-          return true;
-        };
-        commitPendingManualDate = commitManualDate;
-        manual.addEventListener('keydown', (event) => {
-          if (event.key !== 'Enter') return;
-          event.preventDefault();
-          if (!commitManualDate()) closeContentControlMenu(menu);
-        });
-        manual.addEventListener('blur', () => {
-          queueMicrotask(() => {
-            if (!menu.isConnected || menu.contains(document.activeElement)) return;
-            if (!commitManualDate()) closeContentControlMenu(menu);
-          });
-        });
-        const header = document.createElement('div');
-        header.className = 'docx-content-control-calendar-header';
-        const previous = document.createElement('button');
-        previous.type = 'button';
-        previous.className = 'docx-content-control-calendar-nav';
-        previous.textContent = '‹';
-        const previousMonth = new Date(viewYear, viewMonth - 1, 1);
-        previous.setAttribute('aria-label', monthFormatter.format(previousMonth));
-        const title = document.createElement('div');
-        title.className = 'docx-content-control-calendar-title';
-        title.textContent = monthFormatter.format(new Date(viewYear, viewMonth, 1));
-        const next = document.createElement('button');
-        next.type = 'button';
-        next.className = 'docx-content-control-calendar-nav';
-        next.textContent = '›';
-        const nextMonth = new Date(viewYear, viewMonth + 1, 1);
-        next.setAttribute('aria-label', monthFormatter.format(nextMonth));
-        previous.addEventListener('mousedown', (event) => event.stopPropagation());
-        next.addEventListener('mousedown', (event) => event.stopPropagation());
-        previous.addEventListener('click', () => {
-          viewMonth -= 1;
-          if (viewMonth < 0) {
-            viewMonth = 11;
-            viewYear -= 1;
-          }
-          renderCalendar();
-        });
-        next.addEventListener('click', () => {
-          viewMonth += 1;
-          if (viewMonth > 11) {
-            viewMonth = 0;
-            viewYear += 1;
-          }
-          renderCalendar();
-        });
-        header.append(previous, title, next);
-
-        const weekdays = document.createElement('div');
-        weekdays.className = 'docx-content-control-calendar-weekdays';
-        for (let index = 0; index < 7; index += 1) {
-          const weekday = document.createElement('span');
-          weekday.textContent = weekdayFormatter.format(new Date(2024, 0, 1 + index));
-          weekdays.append(weekday);
-        }
-
-        const grid = document.createElement('div');
-        grid.className = 'docx-content-control-calendar-grid';
-        grid.setAttribute('role', 'grid');
-        const firstWeekday = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7;
-        const today = new Date();
-        for (let index = 0; index < 42; index += 1) {
-          const date = new Date(viewYear, viewMonth, index - firstWeekday + 1);
-          const day = document.createElement('button');
-          day.type = 'button';
-          day.className = 'docx-content-control-calendar-day';
-          day.textContent = String(date.getDate());
-          day.setAttribute('role', 'gridcell');
-          day.setAttribute('aria-label', dayFormatter.format(date));
-          if (date.getMonth() !== viewMonth) day.dataset.otherMonth = '';
-          if (selectedDate && sameDay(date, selectedDate)) {
-            day.dataset.selected = '';
-            day.setAttribute('aria-selected', 'true');
-          }
-          if (sameDay(date, today)) day.dataset.today = '';
-          day.addEventListener('mousedown', (event) => event.stopPropagation());
-          day.addEventListener('click', () => {
-            closeContentControlMenu(menu);
-            contentControlsOps.setValue(controlId, isoDate(date));
-          });
-          grid.append(day);
-        }
-        menu.replaceChildren(manual, header, weekdays, grid);
-      };
-      renderCalendar();
-      pagesLayer.append(menu);
-      setContentControlWidgetOpen(controlId, true);
-      armContentControlMenuDismiss(menu, () => {
-        if (!commitPendingManualDate?.()) closeContentControlMenu(menu);
-      });
-      menu
-        .querySelector<HTMLElement>(
-          '[data-selected], [data-today], .docx-content-control-calendar-day'
-        )
-        ?.focus({ preventScroll: true });
-    }
+    activeContentControlMenu = menu;
+    placeContentControlMenu(
+      menu,
+      pagesLayer,
+      contentControlMenuAnchor(
+        currentLayout,
+        scale,
+        controlId,
+        pagesLayer,
+        materializedExtent?.pageOffsetX
+      )
+    );
+    setContentControlWidgetOpen(controlId, true);
+    stopContentControlMenuDismiss = armContentControlMenuDismiss(menu, () =>
+      closeContentControlMenu(menu)
+    );
+    if (kind === 'date') focusContentControlCalendar(menu);
+    else
+      (
+        menu.querySelector<HTMLElement>('input') ??
+        menu.querySelector<HTMLElement>('[role=option][tabindex="0"]') ??
+        menu.querySelector<HTMLElement>('button,[data-docx-part=empty]')
+      )?.focus({ preventScroll: true });
   }
 
   const contentControlsOps: ContentControlOps = {
@@ -2508,11 +2344,15 @@ export function mountPaginatedSurface(
     },
     setValue(controlId, value) {
       const reason = contentControlsOps.disabledReason(controlId, 'edit');
-      if (reason) {
-        lastRejection = reason;
-        options.onChange?.(currentState());
-        return false;
-      }
+      if (reason) return publishRefusal(reason);
+      // A gallery control's value is a building block name, resolved against the glossary.
+      const ops = contentControlValueOps(
+        findControl(controlId),
+        () => session.currentPackage(),
+        controlId,
+        value
+      );
+      if (!ops) return publishRefusal('unknown-building-block');
       let committed = false;
       commit(() => {
         // `applyOps`, not `session.applyTreeOps`: this lane wrote straight past the mode
@@ -2525,7 +2365,7 @@ export function mountPaginatedSurface(
         // constant. Pinned to the body, this wrote body content while the reader was editing
         // a header, and a control in that header could never be written at all.
         const result = applyOps(
-          [{ op: 'setContentControlValue', controlId, value }],
+          ops,
           selectionMark(),
           undefined,
           storyScopeOfNodeId(session, controlId, storyScope()),
@@ -2538,17 +2378,9 @@ export function mountPaginatedSurface(
     },
     remove(controlId) {
       const id = controlId ?? contentControlAtCaret()?.id;
-      if (!id) {
-        lastRejection = 'notFound';
-        options.onChange?.(currentState());
-        return false;
-      }
+      if (!id) return publishRefusal('notFound');
       const reason = contentControlsOps.disabledReason(id, 'remove');
-      if (reason) {
-        lastRejection = reason;
-        options.onChange?.(currentState());
-        return false;
-      }
+      if (reason) return publishRefusal(reason);
       let committed = false;
       commit(() => {
         const result = applyOps(
@@ -2877,6 +2709,7 @@ export function mountPaginatedSurface(
   const dateLocale = createSurfaceDateLocale(options.locale, flushTypeBuffer);
   let translate = options.translate;
   let textFormInteraction: ReturnType<typeof createTextFormFieldInteraction> | null = null;
+  let legacyCheckboxInteraction: ReturnType<typeof createLegacyCheckboxInteraction> | null = null;
   function applyOps(
     ops: readonly TreeDocOp[],
     selectionBefore?: Parameters<TreeDocxSession['applyTreeOps']>[1],
@@ -4612,15 +4445,19 @@ export function mountPaginatedSurface(
       // coexist with the delete ops below): the typed range gets the caret run's own
       // properties plus the armed ones, in the SAME transaction — one undo step.
       const pendingOps = consumePendingFormatOps(target.paragraphId, target.offset, text.length);
-      const insertOps: TreeDocOp[] = [
-        ...plan.ops,
-        { op: 'insertText', paragraphId: target.paragraphId, offset: target.offset, text },
-      ];
-      const redoMark = {
-        paragraphId: target.paragraphId,
-        start: target.offset + text.length,
-        end: target.offset + text.length,
-      };
+      // The caret's own control OWNS the insert: at a control's trailing edge the store's
+      // default lands beside it (right for a link), but Word keeps typing inside a control.
+      const inside = plan.ops.length === 0 ? insertOwnerOf(contentControlAtCaret()) : undefined;
+      const insertOps: TreeDocOp[] = [...plan.ops, typedInsertText(target, text, inside)];
+      // Typing at a prompt's edge replaces the prompt, so the text lands where the prompt
+      // began; a caret counted from the pressed offset sat past the paragraph's new end.
+      const landing = promptInsertionLanding(
+        partOfNodeId(session, target.paragraphId) ?? session.part(),
+        target.paragraphId,
+        target.offset,
+        text.length
+      );
+      const redoMark = { paragraphId: target.paragraphId, start: landing, end: landing };
       commit(
         () =>
           withoutPendingOnRejection(
@@ -4629,7 +4466,7 @@ export function mountPaginatedSurface(
             selectionMark(),
             redoMark
           ),
-        () => collapsedAt({ paragraphId: target.paragraphId, offset: target.offset + text.length })
+        () => collapsedAt({ paragraphId: target.paragraphId, offset: landing })
       );
     },
     proposeTextChange: (kind, text, author) => commitProposedTextChange(kind, text, author),
@@ -4885,10 +4722,11 @@ export function mountPaginatedSurface(
       ) {
         noteOps.setActiveNotePageIndex(moved.pageIndex);
       }
-      setSelection(
-        { anchor: extend ? selection.anchor : moved.position, head: moved.position },
-        true
-      );
+      const target = { anchor: extend ? selection.anchor : moved.position, head: moved.position };
+      // A prompt is one unit for the caret, as in Word: arrowing into it selects the whole
+      // prompt rather than parking the caret inside text the first keystroke replaces, which
+      // left the buffered keystrokes after it aimed past the end of the shortened paragraph.
+      setSelection(extend ? target : absorbPlaceholderControls(currentLayout, target), true);
     },
 
     deleteWordBackward() {
@@ -5749,8 +5587,13 @@ export function mountPaginatedSurface(
         container.ownerDocument.defaultView?.removeEventListener('resize', onViewportResize);
         viewportObserver?.disconnect();
         observedScroller = null;
+        // An open engine menu holds document-level dismiss listeners; a surface torn down
+        // with its menu still up would leave them swallowing the next editor's Escape.
+        removeExistingContentControlMenu();
         widgetSessions.destroy();
+        pictureWidget.destroy();
         textFormInteraction?.destroy();
+        legacyCheckboxInteraction?.destroy();
         pointer?.destroy();
         tableInteraction.destroy();
         navigation.destroy();
@@ -5760,6 +5603,7 @@ export function mountPaginatedSurface(
         pagesLayer.removeEventListener('click', onTocRowClick);
         pagesLayer.removeEventListener('pointermove', onTocPointerMove);
         pagesLayer.removeEventListener('pointerleave', onTocPointerLeave);
+        controlHover.destroy();
         // Drop pending layout work and stop listening BEFORE the DOM goes, or a commit from
         // another editor sharing this store would paint into a detached container.
         scheduler.cancel();
@@ -5933,6 +5777,18 @@ export function mountPaginatedSurface(
     runtimeOptions.initialTextFormInput
   );
   registerFormFieldIdentity(surface, textFormInteraction.fieldId);
+  legacyCheckboxInteraction = createLegacyCheckboxInteraction({
+    pagesLayer,
+    part: (paragraphId?: string) =>
+      partOfNodeId(session, paragraphId ?? selection.head.paragraphId) ?? session.part(),
+    editable: () => editingMode === 'edit' && !showFieldCodes,
+    protected: (paragraphId) =>
+      formsProtectionEnabled(session.settingsRoot()) &&
+      sectionProtectsForms(partOfNodeId(session, paragraphId) ?? session.part(), paragraphId),
+    selection: () => selection,
+    select: (next) => setSelection(next),
+    apply: (op) => applyTextFormOperation(op, commit, applyOps),
+  });
   const dispatchKeyDown = createKeyDownHandler(surface, {
     ...options,
     onToggleFieldCodes: () => {
@@ -5947,7 +5803,8 @@ export function mountPaginatedSurface(
     // The browser may have moved its caret without delivering the queued `selectionchange`
     // yet. Close that window before a command resolves its TreeDocOp from model selection.
     if (!event.defaultPrevented) selectionSync.adoptBeforeInput();
-    if (!textFormInteraction?.keydown(event)) dispatchKeyDown(event);
+    if (legacyCheckboxInteraction?.keydown(event) || textFormInteraction?.keydown(event)) return;
+    dispatchKeyDown(event);
   };
   const { onCopy, onCut, onPaste } = createClipboardHandlers(surface);
   const dispatchBeforeInput = createBeforeInputHandler(surface, {

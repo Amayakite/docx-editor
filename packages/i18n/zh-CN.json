@@ -678,7 +678,18 @@
       "picture": "图片",
       "plainText": "纯文本",
       "repeatingSection": "重复节",
-      "richText": "格式文本"
+      "richText": "格式文本",
+      "buildingBlockGallery": null
+    },
+    "calendar": {
+      "nextMonth": null,
+      "previousMonth": null,
+      "today": null,
+      "month": null,
+      "year": null
+    },
+    "gallery": {
+      "empty": null
     }
   },
   "notes": {

@@ -2975,9 +2975,7 @@ function layoutBlocksWithGeometry(
 }
 
 export { createFixedMeasurer } from './fixed-measurer.ts';
-
-// Boundary records moved to their own module; re-exported here because the editor facade
-// and the tests import them from the layout entry they always did.
+// Boundary records live in their own module; the editor facade and tests import them here.
 export {
   attachContentControlBoundaries,
   contentControlContextToken,

@@ -34,6 +34,54 @@ export function blankDocumentBytes(): Uint8Array;
 export const BROWSER_AUTOMATION_CAPABILITIES: AutomationCapabilities;
 
 // @public
+export function calendarDateForKey(iso: string, key: string, locale?: string, shift?: boolean): string | null;
+
+// @public
+export function calendarDateFromText(text: string, locale?: string): string | null;
+
+// @public
+export function calendarDateText(iso: string, locale?: string): string;
+
+// @public
+export interface CalendarDay {
+    readonly day: number;
+    readonly iso: string;
+    readonly label: string;
+    readonly otherMonth: boolean;
+    readonly selected: boolean;
+    readonly today: boolean;
+}
+
+// @public
+export interface CalendarMonth {
+    readonly days: readonly CalendarDay[];
+    readonly month: number;
+    readonly title: string;
+    readonly weekdays: readonly string[];
+    // (undocumented)
+    readonly year: number;
+}
+
+// @public
+export function calendarMonth(year: number, month: number, options?: CalendarMonthOptions): CalendarMonth;
+
+// @public
+export function calendarMonthNames(locale?: string): readonly string[];
+
+// @public
+export interface CalendarMonthOptions {
+    readonly locale?: string;
+    readonly selected?: string | null;
+    readonly today?: Date;
+}
+
+// @public
+export function calendarMonthTitle(year: number, month: number, locale?: string): string;
+
+// @public
+export function calendarWeekdays(locale?: string): readonly string[];
+
+// @public
 export function canExecuteImageCommand(command: Extract<EditorCommand, {
     type: 'insertImage' | 'replaceImage';
 }>, surface: PaginatedSurface | null): CanResult;
@@ -858,7 +906,23 @@ export function computeResizedImageExtentEmu(startWidthEmu: number, startHeightE
 };
 
 // @public
+export const CONTENT_CONTROL_PICTURE_ACCEPT = "image/png,image/jpeg,image/gif,image/bmp,image/webp";
+
+// @public
+export interface ContentControlListNavigation {
+    keyDown(event: KeyboardEvent, root: HTMLElement): void;
+    reset(): void;
+}
+
+// @public
+export function contentControlPopupKeyDown(panel: HTMLElement, event: KeyboardEvent, cancel: () => void): void;
+
+// @public
+export function contentControlPopupOpener(anchor: HTMLElement | null): HTMLElement | null;
+
+// @public
 export interface ContentControlWidgetChromeHandlers {
+    readonly kinds?: readonly ContentControlWidgetSession['kind'][];
     // (undocumented)
     readonly onRequest?: (session: ContentControlWidgetSession) => void;
 }
@@ -881,7 +945,9 @@ export interface ContentControlWidgetSession {
         readonly value: string;
     }[];
     // (undocumented)
-    readonly kind: 'dropdown' | 'comboBox' | 'date';
+    readonly kind: 'dropdown' | 'comboBox' | 'date' | 'checkbox' | 'picture' | 'buildingBlockGallery';
+    readonly locale: string;
+    replaceImage?(bytes: Uint8Array): Promise<boolean>;
     // (undocumented)
     readonly signal: AbortSignal;
     // (undocumented)
@@ -890,6 +956,9 @@ export interface ContentControlWidgetSession {
 
 // @public
 export function createBrowserAutomationHost(editor: DocxEditorInstance): AutomationHost;
+
+// @public
+export function createContentControlListNavigation(locale?: string): ContentControlListNavigation;
 
 // @public
 export function createDocxEditor(config: DocxEditorConfig): DocxEditorInstance;
@@ -1145,6 +1214,9 @@ export function finalizeImageOverlayInteraction(options: {
     readonly session: ImageInteractionSession;
     readonly shiftKey: boolean;
 }): FinalizedImageOverlayInteraction;
+
+// @public
+export function firstDayOfWeek(locale?: string): number;
 
 // @public
 export const FIT_WIDTH_ZOOM_MODE: ZoomMode;
@@ -1460,6 +1532,9 @@ export interface InvalidTextFormFieldSession {
 export function isFontResolver(value: unknown): value is MarkedFontResolver;
 
 // @public
+export function isoDateOf(date: Date): string;
+
+// @public
 export function isStaleImageInteractionCommit(editor: Pick<DocxEditorInstance, 'surface' | 'mountGeneration'>, session: ImageInteractionSession): ExecResult | null;
 
 // @public
@@ -1515,6 +1590,9 @@ export type NavigationCommand = 'left' | 'right' | 'up' | 'down' | 'wordLeft' | 
 
 // @public (undocumented)
 export const NO_MIXED_FIELDS: ParagraphDialogMixed;
+
+// @public
+export function observeContentControlPopup(panel: HTMLElement, anchor: HTMLElement): () => void;
 
 // @public
 export type OpenPaginatedResult = {
@@ -2048,6 +2126,9 @@ export interface ParagraphTabStop {
 }
 
 // @public
+export function parseIsoDate(value: string): Date | null;
+
+// @public
 export function partOfNodeId(session: Pick<TreeDocxSessionView, 'currentPackage' | 'part'>, nodeId: string | undefined): OoxmlPart | null;
 
 // @public
@@ -2057,6 +2138,9 @@ export function pointsToEmu(points: number): number;
 export interface PopupChromeRegistrationOptions {
     readonly fallback?: boolean;
 }
+
+// @public
+export function positionContentControlPopup(panel: HTMLElement, anchor: HTMLElement): void;
 
 // @public
 export function positionInputFromPropertiesCommand(command: {
@@ -2426,6 +2510,12 @@ export interface SemanticSelection {
     // (undocumented)
     readonly head: SemanticPosition;
 }
+
+// @public
+export function shiftMonth(year: number, month: number, delta: 1 | -1): {
+    readonly month: number;
+    readonly year: number;
+};
 
 // @public
 export const signedFirstLineOf: (kind: SpecialIndent, magnitudeTwips: number) => number;

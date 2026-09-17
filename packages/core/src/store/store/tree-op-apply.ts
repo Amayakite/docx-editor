@@ -7,7 +7,7 @@ import {
   isInlineControl,
 } from './content-control-checkbox.ts';
 import { valueContent, withParagraphDiff } from './content-control-value-content.ts';
-import { applyCommitTextFormField, applyTextFormFieldDefault } from './tree-op-field-results.ts';
+import { applyFieldResultOp, isFieldResultOp } from './tree-op-field-results.ts';
 import { removeCoveredTextFormDefinitions } from './text-form-field-deletion.ts';
 // Op application over the canonical tree (tree-ops seam).
 //
@@ -73,6 +73,7 @@ import {
   paraIdOf,
   usedParaIds,
   w14PrefixInScopeAt,
+  fnv1a32,
 } from '../package/para-id.ts';
 import {
   TEXT_DEPS,
@@ -145,7 +146,6 @@ import {
   applyReplaceTocResult,
   applyRewriteTocPageNumbers,
 } from './tree-op-toc.ts';
-import { applyRefreshFieldResults } from './tree-op-field-results.ts';
 import { applyInsertTable } from './tree-op-insert-table.ts';
 import { applyReplaceStoryBlocks } from './tree-op-story-replace.ts';
 import {
@@ -168,9 +168,11 @@ import {
   applyTableCellPropertyOp,
 } from './tree-op-tables.ts';
 import { contentControlAtCaret, validateTreeOp } from './tree-op-validate.ts';
-import { fnv1a32 } from '../package/para-id.ts';
-import { applyDrawingOp, isDrawingTreeDocOp } from './tree-op-drawings.ts';
+import { isDrawingTreeDocOp } from './tree-op-drawings.ts';
 import { applyInsertFragment } from './tree-op-fragment.ts';
+import { applyDrawingContentEdit } from './drawing-content-edit.ts';
+import { applyInsertBuildingBlock } from './building-block-insert.ts';
+import { restoreEmptiedPlaceholder } from './content-control-prompt-restore.ts';
 
 /** The one run-level element each insert op places, shared by its tracked and untracked arms. */
 const RUN_ELEMENT_INSERTS: Readonly<
@@ -280,18 +282,17 @@ export function applyTreeOp(part: OoxmlPart, op: TreeDocOp, options?: EditOption
   ) {
     return applyTableCellPropertyOp(part, op, options);
   }
-  if (isDrawingTreeDocOp(op)) return applyDrawingOp(part, op, options);
+  if (isDrawingTreeDocOp(op)) return applyDrawingContentEdit(part, op, options);
 
   if (op.op === 'insertFragment') return applyInsertFragment(part, op, options);
+  if (op.op === 'insertBuildingBlock') return applyInsertBuildingBlock(part, op, options);
   if (op.op === 'insertTable') return applyInsertTable(part, op, options);
   if (op.op === 'deleteBlock') return applyDeleteBlock(part, op.blockId, options);
   if (op.op === 'insertToc') return applyInsertToc(part, op, options);
   if (op.op === 'replaceTocResult') return applyReplaceTocResult(part, op, options);
   if (op.op === 'rewriteTocPageNumbers') return applyRewriteTocPageNumbers(part, op, options);
-  if (op.op === 'commitTextFormField') return applyCommitTextFormField(part, op, options);
+  if (isFieldResultOp(op)) return applyFieldResultOp(part, op, options);
   if (op.op === 'setFieldCode') return applySetFieldCode(part, op, options);
-  if (op.op === 'setTextFormFieldDefault') return applyTextFormFieldDefault(part, op, options);
-  if (op.op === 'refreshFieldResults') return applyRefreshFieldResults(part, op, options);
   if (op.op === 'joinParagraphs') return applyJoin(part, op.firstId, op.secondId, options);
   if ((op.op === 'setHyperlinkTarget' || op.op === 'removeHyperlink') && op.range) {
     return applyPartialHyperlink(part, op, options);
@@ -1001,16 +1002,15 @@ function deferOptions(
   return options;
 }
 
-/**
- * After a successful content edit, unwrap a `w:temporary` control in the same effect.
- * Validation already refused when the effective wrapper lock forbids removal.
- */
+/** After a content edit: a temporary control unwraps (a locked wrapper was refused by
+ * validation), and any other control the edit emptied shows its prompt again. */
 function finishContentEdit(
   result: TreeOpResult,
   control: OoxmlNode | null,
   options?: EditOptions
 ): TreeOpResult {
-  if (!result.ok || !control || !isTemporaryControl(control)) return result;
+  if (!result.ok || !control) return result;
+  if (!isTemporaryControl(control)) return restoreEmptiedPlaceholder(result, control.id, options);
   // Re-find: the control id is stable across the preceding content edit.
   const stillThere = findContentControl(result.part, control.id);
   if (!stillThere) return result;
@@ -1968,7 +1968,7 @@ function applyRemoveContentControl(
   return fromEdit(replaceChildren(part, owner.id, children, options), effect);
 }
 
-function replaceControlContent(
+export function replaceControlContent(
   control: OoxmlNode,
   contentChildren: readonly OoxmlNode[],
   nextId: () => string

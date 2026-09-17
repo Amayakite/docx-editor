@@ -4,6 +4,8 @@
 
 ```ts
 
+import { CalendarDay } from '@docx-editor.dev/core/editor';
+import { CalendarMonth } from '@docx-editor.dev/core/editor';
 import { CHROME_GROUPS } from '@docx-editor.dev/core/editor';
 import { CHROME_MENUS } from '@docx-editor.dev/core/editor';
 import { ChromeMenu } from '@docx-editor.dev/core/editor';
@@ -19,6 +21,7 @@ import { commandForSlot } from '@docx-editor.dev/core/editor';
 import { ComponentType } from 'react';
 import { composeFontConfiguration } from '@docx-editor.dev/core/editor';
 import { composeFontOrigins } from '@docx-editor.dev/core/editor';
+import { ContentControlListNavigation } from '@docx-editor.dev/core/editor';
 import { ContentControlSummary } from '@docx-editor.dev/core';
 import { ContentControlType } from '@docx-editor.dev/core';
 import { ContentControlWidgetSession } from '@docx-editor.dev/core/editor';
@@ -201,6 +204,31 @@ export interface ContentControlProps extends ContentControlPartProps {
 
 // @public (undocumented)
 export type ContentControlSlotId = (typeof CONTENT_CONTROL_SLOTS)[keyof typeof CONTENT_CONTROL_SLOTS];
+
+// @public
+export interface ContentControlWidgetDayProps extends DocxEditorContentControlWidgetPartProps {
+    // (undocumented)
+    day: CalendarDay;
+}
+
+// @public
+export interface ContentControlWidgetEntry {
+    // (undocumented)
+    readonly displayText: string;
+    // (undocumented)
+    readonly value: string;
+}
+
+// @public
+export interface ContentControlWidgetItemProps extends DocxEditorContentControlWidgetPartProps {
+    // (undocumented)
+    item: ContentControlWidgetEntry;
+}
+
+// @public
+export interface ContentControlWidgetPictureProps extends DocxEditorContentControlWidgetPartProps {
+    autoOpen?: boolean;
+}
 
 // @public
 export interface ContextMenuAnchor {
@@ -441,11 +469,80 @@ export interface DocxEditorContentControlNamespace {
 }
 
 // @public
-export function DocxEditorContentControlWidget(props: DocxEditorContentControlWidgetProps): react.JSX.Element;
+export const DocxEditorContentControlWidget: DocxEditorContentControlWidgetNamespace;
+
+// @public
+export interface DocxEditorContentControlWidgetNamespace {
+    // (undocumented)
+    (props: DocxEditorContentControlWidgetProps): ReactNode;
+    // (undocumented)
+    readonly Apply: typeof ContentControlWidgetApply;
+    // (undocumented)
+    readonly Calendar: typeof ContentControlWidgetCalendar;
+    // (undocumented)
+    readonly Cancel: typeof ContentControlWidgetCancel;
+    // (undocumented)
+    readonly Day: typeof ContentControlWidgetDay;
+    // (undocumented)
+    readonly Error: typeof ContentControlWidgetError;
+    // (undocumented)
+    readonly Footer: typeof ContentControlWidgetFooter;
+    // (undocumented)
+    readonly Grid: typeof ContentControlWidgetGrid;
+    // (undocumented)
+    readonly Header: typeof ContentControlWidgetHeader;
+    // (undocumented)
+    readonly Input: typeof ContentControlWidgetInput;
+    // (undocumented)
+    readonly Item: typeof ContentControlWidgetItem;
+    // (undocumented)
+    readonly List: typeof ContentControlWidgetList;
+    // (undocumented)
+    readonly Month: typeof ContentControlWidgetMonth;
+    // (undocumented)
+    readonly Navigation: typeof ContentControlWidgetNavigation;
+    // (undocumented)
+    readonly NextMonth: typeof ContentControlWidgetNextMonth;
+    // (undocumented)
+    readonly Picture: typeof ContentControlWidgetPicture;
+    // (undocumented)
+    readonly PreviousMonth: typeof ContentControlWidgetPreviousMonth;
+    // (undocumented)
+    readonly Title: typeof ContentControlWidgetTitle;
+    // (undocumented)
+    readonly Today: typeof ContentControlWidgetToday;
+    // (undocumented)
+    readonly Weekdays: typeof ContentControlWidgetWeekdays;
+    // (undocumented)
+    readonly Year: typeof ContentControlWidgetYear;
+}
+
+// @public
+export interface DocxEditorContentControlWidgetPartProps {
+    // (undocumented)
+    'aria-label'?: string;
+    // (undocumented)
+    [attribute: `data-${string}`]: unknown;
+    // (undocumented)
+    [attribute: `aria-${string}`]: unknown;
+    // (undocumented)
+    asChild?: boolean;
+    // (undocumented)
+    children?: DocxEditorChildren;
+    // (undocumented)
+    className?: string;
+    // (undocumented)
+    hidden?: boolean;
+    // (undocumented)
+    id?: string;
+    // (undocumented)
+    style?: CSSProperties;
+    // (undocumented)
+    title?: string;
+}
 
 // @public
 export interface DocxEditorContentControlWidgetProps {
-    // (undocumented)
     children?: DocxEditorChildren;
     // (undocumented)
     className?: string;
@@ -962,6 +1059,8 @@ export type DocxEditorPopup<Props extends object> = false | ((props: Props) => D
 export interface DocxEditorPopups {
     // (undocumented)
     contentControl?: DocxEditorPopup<ContentControlProps>;
+    contentControlCheckbox?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
+    contentControlPicture?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
     // (undocumented)
     contentControlWidget?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
     // (undocumented)
@@ -2409,6 +2508,48 @@ export interface UseContentControlResult {
     readonly toggleInspector: () => void;
     // (undocumented)
     readonly toggleShowAll: () => void;
+}
+
+// @public
+export function useContentControlWidget(): UseContentControlWidgetResult;
+
+// @public
+export interface UseContentControlWidgetResult {
+    readonly accept: string;
+    apply(value?: string): boolean;
+    // (undocumented)
+    applyDateText(): boolean;
+    // (undocumented)
+    readonly calendar: CalendarMonth;
+    // (undocumented)
+    cancel(): void;
+    readonly dateText: string;
+    focusDay(iso: string): void;
+    readonly focusIso: string | null;
+    readonly isEnabled: boolean;
+    // (undocumented)
+    readonly items: readonly ContentControlWidgetEntry[];
+    // (undocumented)
+    readonly kind: ContentControlWidgetSession['kind'];
+    readonly listId: string;
+    readonly listNavigation: ContentControlListNavigation;
+    // (undocumented)
+    nextMonth(): void;
+    // (undocumented)
+    previousMonth(): void;
+    readonly refused: boolean;
+    replaceImage(source: Blob | Uint8Array): Promise<boolean>;
+    selectDay(iso: string): boolean;
+    selectToday(): boolean;
+    // (undocumented)
+    readonly session: ContentControlWidgetSession;
+    // (undocumented)
+    setDateText(text: string): void;
+    // (undocumented)
+    setValue(value: string): void;
+    showMonth(year: number, month: number): void;
+    // (undocumented)
+    readonly value: string;
 }
 
 // @public

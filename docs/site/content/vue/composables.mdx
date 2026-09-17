@@ -357,6 +357,28 @@ Returns the link popover state and actions. Use
 `useHyperlinkPopupInstance` outside the component that owns the popover
 context.
 
+## useContentControlWidget
+
+Call `useContentControlWidget()` in a child of `DocxEditorContentControlWidget`
+to read its draft and commit values. Reactive members are refs; templates unwrap
+them automatically. `listId` and `listNavigation` are stable values.
+
+| Members                                         | Purpose                                  |
+| ----------------------------------------------- | ---------------------------------------- |
+| `session`, `kind`, `items`, `value`, `setValue` | Session and draft value                  |
+| `isEnabled`, `refused`, `apply`, `cancel`       | Validated writes and dismissal           |
+| `calendar`, `focusIso`, `focusDay`              | Month grid and keyboard focus            |
+| `previousMonth`, `nextMonth`, `showMonth`       | Month navigation                         |
+| `selectDay`, `selectToday`                      | Immediate date selection                 |
+| `dateText`, `setDateText`, `applyDateText`      | Regional numeric date entry              |
+| `listId`, `listNavigation`                      | List relationships and keyboard behavior |
+| `accept`, `replaceImage`                        | Picture file types and replacement       |
+
+`showMonth(year, month)` takes a zero-based month and a year from 100 through 9999.
+For date sessions, `apply()` commits an ISO date; `applyDateText()` parses the regional draft first.
+See [Compose control popups](/docs/2.x/guides/customize-dialogs#compose-the-value-pop-up)
+for registration, parts, and custom actions.
+
 ## useContentControl and useContentControlInstance
 
 Returns content-control locks, value actions, and form-fill state. Use

@@ -983,6 +983,31 @@ a.docx-hyperlink:focus-visible {
   border-color: color-mix(in srgb, var(--doc-primary) 55%, transparent) !important;
 }
 
+/* Word shows a control's tab only while the pointer or the caret is on the control; a page
+   of forms is otherwise plain text. The widget keeps its box (the press target and the
+   focus stop stay where they are) and only its paint waits: it appears under the pointer,
+   at the caret, while its pop-up is open, under show-all, and when it holds keyboard focus.
+   A checkbox paints nothing of its own anyway, so it is exempt. */
+.docx-content-control-widget:not([data-docx-cc-widget='checkbox']) {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.docx-content-control-chrome[data-active] .docx-content-control-widget,
+.docx-content-control-chrome[data-open] .docx-content-control-widget,
+.docx-content-control-chrome[data-hover] .docx-content-control-widget,
+.docx-content-control-chrome[data-boundary-visible] .docx-content-control-widget,
+.docx-content-control-chrome:hover .docx-content-control-widget,
+.docx-content-control-widget:focus-visible {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docx-content-control-widget {
+    transition: none;
+  }
+}
+
 /* Same rule for the widget: a disabled button that lights under the pointer reads as live. */
 .docx-content-control-chrome[data-read-only]:hover .docx-content-control-widget {
   background: color-mix(in srgb, var(--doc-primary) 4%, var(--doc-page-bg-rendered));
@@ -995,49 +1020,107 @@ a.docx-hyperlink:focus-visible {
   display: grid;
   place-items: center;
   color: var(--doc-primary);
+  /* The painter sets the widget's font-size to its painted side, so every glyph below is
+     drawn in `em` and follows the page zoom instead of staying a 16px chip at every scale. */
   font:
-    600 10px/1 system-ui,
+    600 0.625em/1 system-ui,
     sans-serif;
 }
 
 .docx-content-control-widget[data-docx-cc-widget='dropdown']::after,
-.docx-content-control-widget[data-docx-cc-widget='comboBox']::after {
+.docx-content-control-widget[data-docx-cc-widget='comboBox']::after,
+.docx-content-control-widget[data-docx-cc-widget='buildingBlockGallery']::after {
   content: '▾';
+}
+
+.docx-content-control-picture-input {
+  font: inherit;
+}
+
+/* The engine's own picture picker is a file input that only ever opens the browser's dialog;
+   it takes no space on the sheet and never paints. */
+.docx-pages .docx-content-control-picture-picker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* A picture control's widget opens a file picker: a small frame with a "mountain" inside,
+   the same glyph Word draws on its picture placeholder, in `em` so it follows the zoom. */
+.docx-content-control-widget[data-docx-cc-widget='picture']::after {
+  content: '';
+  inset: 0.1875em;
+  display: block;
+  border: 0.09em solid currentcolor;
+  border-radius: 0.125em;
+  background:
+    linear-gradient(currentcolor, currentcolor) 0.125em 0.125em / 0.125em 0.125em no-repeat,
+    linear-gradient(
+        to top right,
+        transparent 46%,
+        currentcolor 50%,
+        currentcolor 62%,
+        transparent 66%
+      )
+      0 0 / 100% 100% no-repeat;
 }
 
 .docx-content-control-widget[data-docx-cc-widget='date']::after {
   content: '';
-  inset: 3px;
+  inset: 0.1875em;
   display: block;
-  border: 1.5px solid currentcolor;
-  border-radius: 2px;
-  background: linear-gradient(currentcolor, currentcolor) 0 3px / 100% 1px no-repeat;
+  border: 0.09em solid currentcolor;
+  border-radius: 0.125em;
+  background: linear-gradient(currentcolor, currentcolor) 0 0.1875em / 100% 0.0625em no-repeat;
 }
 
 .docx-content-control-widget[data-docx-cc-widget='date']::before {
   content: '';
   position: absolute;
   z-index: 1;
-  top: 2px;
-  left: 5px;
-  width: 1px;
-  height: 3px;
+  top: 0.125em;
+  left: 0.3125em;
+  width: 0.0625em;
+  height: 0.1875em;
   background: currentcolor;
-  box-shadow: 4px 0 currentcolor;
+  box-shadow: 0.25em 0 currentcolor;
+}
+
+/* A checkbox control's widget is a hit target over the document's own state glyph (☐ / ☒ in
+   the state font, exactly what Word shows), so it paints nothing of its own: a drawn check over
+   a see-through chip showed both the check and the glyph on hover. The chip hugs the glyph box
+   (the painter sizes it from the glyph's span), so hover and active states are a soft tint
+   behind the glyph, the way Word lights a control under the pointer, never a second box. */
+.docx-content-control-widget[data-docx-cc-widget='checkbox'],
+.docx-content-control-chrome[data-read-only]:hover
+  .docx-content-control-widget[data-docx-cc-widget='checkbox'] {
+  border-radius: 0.2em;
+  background: transparent;
+  border-color: transparent !important;
+}
+
+.docx-content-control-chrome[data-active]
+  .docx-content-control-widget[data-docx-cc-widget='checkbox'],
+.docx-content-control-chrome[data-open]
+  .docx-content-control-widget[data-docx-cc-widget='checkbox'],
+.docx-content-control-chrome:hover .docx-content-control-widget[data-docx-cc-widget='checkbox'] {
+  background: color-mix(in srgb, var(--doc-primary) 16%, transparent);
+  border-color: transparent !important;
+}
+
+.docx-content-control-widget[data-docx-cc-widget='checkbox']:active {
+  background: color-mix(in srgb, var(--doc-primary) 28%, transparent);
+}
+
+.docx-content-control-widget[data-docx-cc-widget='checkbox']:focus-visible {
+  outline: 2px solid var(--doc-primary);
+  outline-offset: 1px;
 }
 
 .docx-content-control-widget[data-docx-cc-widget='checkbox']::after {
-  content: '';
-  inset: 2px 5px 4px;
-  display: block;
-  border-right: 2px solid currentcolor;
-  border-bottom: 2px solid currentcolor;
-  opacity: 0;
-  transform: rotate(45deg);
-}
-
-.docx-content-control-widget[data-docx-cc-widget='checkbox'][data-checked='true']::after {
-  opacity: 1;
+  content: none;
 }
 
 .docx-content-control-widget:disabled,
@@ -1047,7 +1130,11 @@ a.docx-hyperlink:focus-visible {
 }
 
 .docx-content-control-menu {
-  min-width: 13rem;
+  min-width: 0;
+  width: 17rem;
+  box-sizing: border-box;
+  font: var(--doc-dialog-font-size, 13px) / 1.5 var(--doc-font-ui, system-ui, sans-serif);
+  color: var(--doc-text);
   max-width: 18rem;
   max-height: 16rem;
   overflow: auto;
@@ -1087,36 +1174,44 @@ a.docx-hyperlink:focus-visible {
 }
 
 .docx-content-control-calendar {
-  width: 17rem;
-  max-width: calc(100vw - 1.5rem);
-  padding: 0.65rem;
+  width: 19rem;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: none;
+  padding: 6px;
   border-radius: 12px;
 }
 
-.docx-content-control-calendar-input {
-  width: 100%;
-  box-sizing: border-box;
-  margin: 0 0 0.6rem;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--doc-border);
-  border-radius: 7px;
-  background: var(--doc-surface);
-  color: var(--doc-text);
+/* The picker footer holds the Today shortcut, as Word's does. */
+.docx-content-control-calendar-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--doc-border);
+}
+
+.docx-content-control-calendar-today {
+  padding: 0.3rem 0.85rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--doc-primary);
+  cursor: pointer;
   font: inherit;
+  font-weight: 600;
 }
 
-.docx-content-control-calendar-input:focus {
-  border-color: var(--doc-primary);
-  outline: 2px solid var(--doc-primary-light);
+.docx-content-control-calendar-today:hover,
+.docx-content-control-calendar-today:focus-visible {
+  background: var(--doc-primary-light);
+  outline: none;
+}
+
+.docx-content-control-calendar-day:focus-visible,
+.docx-content-control-calendar-nav:focus-visible {
+  outline: 2px solid var(--doc-primary);
   outline-offset: 1px;
-}
-
-.docx-content-control-calendar-input[aria-invalid='true'] {
-  border-color: var(--doc-danger);
-}
-
-.docx-content-control-calendar-input::-webkit-calendar-picker-indicator {
-  display: none;
 }
 
 .docx-content-control-calendar-header {
@@ -1124,7 +1219,7 @@ a.docx-hyperlink:focus-visible {
   grid-template-columns: 2rem 1fr 2rem;
   align-items: center;
   gap: 0.35rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 4px;
 }
 
 .docx-content-control-calendar-title {
@@ -1154,19 +1249,24 @@ a.docx-hyperlink:focus-visible {
 .docx-content-control-calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 0.2rem;
+  gap: 2px;
 }
 
 .docx-content-control-calendar-weekdays {
   margin-bottom: 0.2rem;
   color: var(--doc-text-muted);
   font-size: 0.75rem;
+  line-height: 1;
   text-align: center;
+}
+
+.docx-content-control-calendar-week {
+  display: contents;
 }
 
 .docx-content-control-calendar-day {
   width: 2rem;
-  height: 2rem;
+  height: 28px;
   border-radius: 7px;
 }
 
@@ -1187,6 +1287,81 @@ a.docx-hyperlink:focus-visible {
 
 .docx-content-control-calendar-day[data-today]:not([data-selected]) {
   box-shadow: inset 0 0 0 1px var(--doc-primary);
+}
+
+.docx-content-control-calendar-navigation {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.docx-content-control-calendar-month,
+.docx-content-control-calendar-year,
+.docx-content-control-menu-input {
+  font: inherit;
+  color: var(--doc-text);
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-border-input);
+  border-radius: var(--doc-dialog-control-radius, 4px);
+  min-height: 2rem;
+  min-width: 0;
+}
+.docx-content-control-calendar-month {
+  flex: 1;
+}
+.docx-content-control-calendar-year {
+  width: 4rem;
+}
+.docx-content-control-menu-list {
+  overflow: auto;
+  max-height: 16rem;
+}
+.docx-content-control-menu-item[aria-selected='true'] {
+  background: var(--doc-primary-light);
+}
+.docx-content-control-menu-item:focus-visible,
+.docx-content-control-calendar :is(input, select, button):focus-visible {
+  outline: 2px solid var(--doc-primary);
+  outline-offset: -2px;
+}
+.docx-content-control-calendar-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.docx-content-control-calendar-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 6px;
+}
+.docx-content-control-calendar-entry .docx-content-control-menu-input {
+  margin: 0;
+  height: 32px;
+  padding: 0 8px;
+}
+.docx-editor .docx-content-control-calendar .docx-dialog__footer {
+  margin-top: 6px;
+  padding: 0;
+}
+.docx-content-control-calendar .docx-dialog__button {
+  min-height: 32px;
+  padding: 4px 10px;
+}
+.docx-content-control-calendar-day {
+  width: 100%;
+  min-width: 0;
+}
+.docx-form-checkbox-hit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
 }
 
 .docx-drawing {
@@ -1756,6 +1931,81 @@ a.docx-hyperlink:focus-visible {
 .docx-field-atom--shaded,
 .docx-field-atom--active {
   background-color: var(--doc-field-shading);
+}
+
+/* A legacy FORMCHECKBOX paints Word's square box over its glyph. The run's font decides the
+   size (`w:size` lands as `w:sz`), and the box is 1em square, which is Word's 12pt box for a
+   12pt field. The box, not the fallback font's ballot glyph, is what the reader sees and
+   presses. The glyph stays in the DOM for copy and search. */
+.docx-page [data-docx-form-checkbox] {
+  position: relative;
+  /* Hide the fallback glyph without touching `color`: the box and its X are drawn in
+     `currentcolor`, so they follow the run's own colour and stay canvas ink (which the dark
+     theme inverts with the page) instead of picking up chrome tokens. */
+  -webkit-text-fill-color: transparent;
+}
+
+.docx-page [data-docx-form-checkbox]::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  transform: translate(-50%, -50%);
+  border: 0.0625em solid currentcolor;
+  border-radius: 0;
+  background: inherit;
+  z-index: 1;
+}
+
+.docx-page [data-docx-form-checkbox][data-checked='true']::after {
+  content: '';
+  z-index: 1;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1em;
+  height: 1em;
+  transform: translate(-50%, -50%);
+  /* Word's checked state is a bold X across the box. */
+  background:
+    linear-gradient(
+      to top right,
+      transparent 44%,
+      currentcolor 46%,
+      currentcolor 54%,
+      transparent 56%
+    ),
+    linear-gradient(
+      to top left,
+      transparent 44%,
+      currentcolor 46%,
+      currentcolor 54%,
+      transparent 56%
+    );
+}
+
+/* Focus and hover affordances are canvas ink too, so they survive the dark theme's inversion. */
+.docx-page [data-docx-form-checkbox]:focus-visible {
+  outline: 2px solid currentcolor;
+  outline-offset: 2px;
+}
+
+.docx-page [data-docx-form-checkbox]:hover::before {
+  border-width: 0.125em;
+}
+
+/* The box prints, exactly like the field's glyph would; only the affordances drop. */
+@media print {
+  .docx-page [data-docx-form-checkbox]:focus-visible {
+    outline: none;
+  }
+
+  .docx-page [data-docx-form-checkbox]:hover::before {
+    border-width: 0.0625em;
+  }
 }
 
 /* Field shading NEVER prints — Word does not print it either. A printed form has no blanks
@@ -7092,7 +7342,8 @@ a.docx-hyperlink:focus-visible {
   z-index: 20;
   display: grid;
   gap: 8px;
-  min-width: 220px;
+  min-width: 0;
+  overflow: auto;
   box-sizing: border-box;
   padding: 12px;
   color: var(--doc-text);
@@ -7143,6 +7394,16 @@ a.docx-hyperlink:focus-visible {
 }
 .docx-editor .docx-content-control-widget-popup .docx-dialog__footer {
   padding: 4px 0 0;
+}
+.docx-editor .docx-content-control-widget-popup[data-kind='date'] {
+  padding: 0;
+  gap: 0;
+}
+.docx-editor
+  .docx-content-control-widget-popup
+  .docx-content-control-calendar
+  .docx-dialog__footer {
+  padding: 0;
 }
 
 /* Alt text popover: a stacked label, text area and footer inside the toolbar panel. */

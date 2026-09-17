@@ -366,6 +366,38 @@ export type {
   InvalidTextFormFieldSession,
   InvalidTextFormFieldChromeHandlers,
 } from './popup-sessions.ts';
+export {
+  calendarMonth,
+  calendarMonthTitle,
+  calendarWeekdays,
+  firstDayOfWeek,
+  isoDateOf,
+  parseIsoDate,
+  shiftMonth,
+} from './content-control-calendar.ts';
+export type {
+  CalendarDay,
+  CalendarMonth,
+  CalendarMonthOptions,
+} from './content-control-calendar.ts';
+
+export {
+  calendarDateForKey,
+  calendarDateText,
+  calendarDateFromText,
+} from './content-control-calendar.ts';
+export {
+  positionContentControlPopup,
+  observeContentControlPopup,
+  contentControlPopupKeyDown,
+} from './content-control-popup-behavior.ts';
+export { createContentControlListNavigation } from './content-control-list-navigation.ts';
+export type { ContentControlListNavigation } from './content-control-list-navigation.ts';
+
+export { calendarMonthNames } from './content-control-calendar.ts';
+
+export { contentControlPopupOpener } from './content-control-popup-behavior.ts';
+export { CONTENT_CONTROL_PICTURE_ACCEPT } from './content-control-picture-widget.ts';
 
 export {
   bindHistoryGroup,

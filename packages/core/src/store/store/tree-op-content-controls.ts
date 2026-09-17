@@ -120,6 +120,7 @@ const DEFAULT_PROMPTS: Readonly<Record<string, string>> = {
   date: 'Click here to enter a date.',
   dropDownList: 'Choose an item.',
   comboBox: 'Choose an item.',
+  docPartList: 'Choose a building block.',
 };
 const DEFAULT_TEXT_PROMPT = 'Click here to enter text.';
 
@@ -536,6 +537,14 @@ const TREE_OP_REACH: {
   setFieldCode: (op) => whole(op.fieldNodeId),
   setTextFormFieldDefault: (op) => whole(op.fieldNodeId),
   commitTextFormField: (op) => whole(op.fieldNodeId),
+  setLegacyCheckbox: (op) => whole(op.fieldNodeId),
+  // A building block pick rebuilds `w:sdtContent`, exactly as a value write does.
+  insertBuildingBlock: (op) => ({
+    kind: 'control',
+    controlId: op.controlId,
+    intent: 'value',
+    replacesContent: true,
+  }),
   refreshFieldResults: (op) => ({ kind: 'nodes', targets: inParagraphs(op.updates) }),
   replaceStoryBlocks: (op) => ({
     kind: 'nodes',
@@ -1096,6 +1105,8 @@ export function formsProtectionRefusal(
   if (op.op === 'setTextFormFieldDefault' && sectionProtectsForms(part, op.paragraphId))
     return 'locked';
   if (op.op === 'commitTextFormField') return validateCommitTextFormField(part, op);
+  // Ticking a legacy checkbox IS filling the form: the field's own `w:enabled` decides.
+  if (op.op === 'setLegacyCheckbox') return null;
   const textField = textFormFieldForEdit(part, op, preferredFieldId);
   if (
     (op.op === 'insertText' || op.op === 'deleteText') &&
@@ -1570,7 +1581,7 @@ export function editedProperties(
 }
 
 /** Rebuild a control's content so it holds exactly `text`, keeping its block shape. */
-function contentWithText(
+export function contentWithText(
   content: OoxmlElement | undefined,
   text: string,
   nextId: () => string,

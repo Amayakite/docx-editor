@@ -392,6 +392,14 @@ export function absorbPlaceholderControls(
   return headIsEnd ? { anchor: from, head: to } : { anchor: to, head: from };
 }
 
+/** Prompts a single press opens the value menu for, beside selecting them. */
+const LIST_PROMPT_TYPES: ReadonlySet<string> = new Set([
+  'dropdown',
+  'comboBox',
+  'date',
+  'buildingBlockGallery',
+]);
+
 export function createPointerController(
   host: PointerHost,
   options: PointerControllerOptions = {}
@@ -963,7 +971,13 @@ export function createPointerController(
 
     const placeholder = placeholderAtHit(layout, hit);
     if (placeholder && !event.shiftKey) {
-      // Prefer the host's atomic select when wired (form-fill / selectControlContent); otherwise
+      // Select before opening: selection repaints chrome and replaces the popup anchor.
+      const openPromptWidget = () => {
+        if (count === 1 && LIST_PROMPT_TYPES.has(placeholder.controlType)) {
+          host.onContentControlWidget?.(placeholder.id, placeholder.controlType);
+        }
+      };
+      // Prefer the host's atomic select when wired (form-fill / selectContentControl); otherwise
       // expand from layout boundary geometry so placeholder presses never land mid-prompt.
       if (host.selectContentControl?.(placeholder.id)) {
         const selected = host.selection();
@@ -982,6 +996,7 @@ export function createPointerController(
           clientX: event.clientX,
           clientY: event.clientY,
         };
+        openPromptWidget();
         return;
       }
       const unit = placeholderSelectionRange(layout, placeholder);
@@ -996,6 +1011,7 @@ export function createPointerController(
           clientY: event.clientY,
         };
         publish(() => host.setSelection({ anchor: unit.from, head: unit.to }));
+        openPromptWidget();
         return;
       }
     }

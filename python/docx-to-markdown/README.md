@@ -180,18 +180,18 @@ for binding in result.review_bindings:  # list[ReviewBinding]
 
 ## Result
 
-| Field | Content |
-| --- | --- |
-| `markdown` | The full logical document |
-| `pages` | `Page`: `number`, `markdown`, `header_markdown`, `footer_markdown`, `comments`, `tracked_changes` |
-| `warnings` | `ExportWarning` with a stable `code`, a message, and a page number when known |
-| `media` | `MediaAsset` with bytes, pixel size, and `ImageOccurrence` placements |
-| `font_resolution` | `FontResolution`: which face measured each family, with `missing` and `complete` |
-| `font_errors` | Font files that could not be admitted |
-| `review_artifacts` | `Comment` and `TrackedChange` records, also split as `comments` and `tracked_changes` |
-| `review_bindings` | `ReviewBinding`: where each artifact sits in the Markdown, in UTF-16 offsets |
-| `pagination` | `Pagination`: layout revision and display mode |
-| `raw` | The converter's complete JSON result |
+| Field              | Content                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| `markdown`         | The full logical document                                                                         |
+| `pages`            | `Page`: `number`, `markdown`, `header_markdown`, `footer_markdown`, `comments`, `tracked_changes` |
+| `warnings`         | `ExportWarning` with a stable `code`, a message, and a page number when known                     |
+| `media`            | `MediaAsset` with bytes, pixel size, and `ImageOccurrence` placements                             |
+| `font_resolution`  | `FontResolution`: which face measured each family, with `missing` and `complete`                  |
+| `font_errors`      | Font files that could not be admitted                                                             |
+| `review_artifacts` | `Comment` and `TrackedChange` records, also split as `comments` and `tracked_changes`             |
+| `review_bindings`  | `ReviewBinding`: where each artifact sits in the Markdown, in UTF-16 offsets                      |
+| `pagination`       | `Pagination`: layout revision and display mode                                                    |
+| `raw`              | The converter's complete JSON result                                                              |
 
 `write(directory)` saves `document.md`, `document.json`, and `media/`, the same layout
 as the Node.js package's `writeMarkdownBundle`.

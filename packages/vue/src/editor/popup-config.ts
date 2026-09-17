@@ -30,6 +30,18 @@ import { useTranslation } from '../i18n';
 /** Render overrides for automatically hosted editor popups. False disables a popup. @public */
 export interface DocxEditorPopups {
   contentControlWidget?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
+  /**
+   * Renderer for checkbox presses. Omitted, the engine toggles the box itself and
+   * `contentControlWidget` never sees a checkbox session. Configure it to confirm, refuse or
+   * restyle the toggle; `DocxEditorContentControlWidget` without children applies it at once.
+   */
+  contentControlCheckbox?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
+  /**
+   * Renderer for picture presses. Omitted, the engine opens its own file picker and
+   * `contentControlWidget` never sees a picture session. Configure it to pick from your own
+   * source; `DocxEditorContentControlWidget` without children opens a file picker at once.
+   */
+  contentControlPicture?: DocxEditorPopup<DocxEditorContentControlWidgetProps>;
   invalidTextFormField?: DocxEditorPopup<DocxEditorInvalidTextFormFieldDialogProps>;
   imageProperties?: DocxEditorPopup<DocxEditorImagePropertiesDialogProps>;
   imageAltText?: DocxEditorPopup<DocxEditorImageAltTextPopupProps>;

@@ -501,11 +501,15 @@ export function breakParagraph(
     bidiSourceBoundaries(paragraph)
   );
   const startOffset = Math.max(0, flow?.startOffset ?? 0);
+  // A zero-width projected piece at the start offset (a `w:sym` glyph, a field-code atom)
+  // owns no model text, so `end <= startOffset` would drop it. At the paragraph start no
+  // earlier fragment can have painted it, so it always stays; a continuation keeps it only
+  // in field-code view, where the atom is the continuation's first visible token.
   const visiblePieces = allPieces.flatMap((piece): FieldAwarePiece[] => {
     if (
       piece.end <= startOffset &&
       !(
-        flow?.showFieldCodes &&
+        (startOffset === 0 || flow?.showFieldCodes) &&
         piece.projected &&
         piece.start === piece.end &&
         piece.start === startOffset
@@ -1429,7 +1433,10 @@ export function breakParagraph(
       // would size the line for characters the reader never sees. Note marks may reserve
       // a wider measureText (eachPage) while painting the real digits.
       const measureSource = piece.measureText ?? candidate;
-      let width = measurer.measure(displayText(measureSource, faceStyle), faceStyle);
+      let width =
+        piece.fieldAtom?.formControl?.kind === 'checkbox'
+          ? faceStyle.fontSizePt
+          : measurer.measure(displayText(measureSource, faceStyle), faceStyle);
       // A candidate may open a line only at a real break opportunity — the shared
       // decision in `lineOpenDecisionAt`, which the anchor-line probe above consumes too.
       const openDecision =

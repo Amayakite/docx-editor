@@ -463,7 +463,19 @@ export {
 export {
   DocxEditorContentControlWidget,
   type DocxEditorContentControlWidgetProps,
+  type DocxEditorContentControlWidgetNamespace,
 } from './editor/DocxEditorContentControlWidget';
+export {
+  useContentControlWidget,
+  type UseContentControlWidgetResult,
+  type ContentControlWidgetEntry,
+} from './editor/content-control-widget/context';
+export {
+  type DocxEditorContentControlWidgetPartProps,
+  type ContentControlWidgetDayProps,
+  type ContentControlWidgetItemProps,
+  type ContentControlWidgetPictureProps,
+} from './editor/content-control-widget/parts';
 export {
   DocxEditorInvalidTextFormFieldDialog,
   type DocxEditorInvalidTextFormFieldDialogProps,

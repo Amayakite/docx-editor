@@ -678,7 +678,18 @@
       "picture": "Imagem",
       "plainText": "Texto sem formatação",
       "repeatingSection": "Seção repetitiva",
-      "richText": "Rich Text"
+      "richText": "Rich Text",
+      "buildingBlockGallery": null
+    },
+    "calendar": {
+      "nextMonth": null,
+      "previousMonth": null,
+      "today": null,
+      "month": null,
+      "year": null
+    },
+    "gallery": {
+      "empty": null
     }
   },
   "notes": {

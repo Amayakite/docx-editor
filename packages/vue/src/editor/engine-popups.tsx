@@ -4,8 +4,21 @@ import type {
   ContentControlWidgetSession,
   InvalidTextFormFieldSession,
 } from '@docx-editor.dev/core/editor';
-import { usePopupConfig } from './popup-config';
+import { usePopupConfig, type DocxEditorPopups } from './popup-config';
 import { useDocxEditor } from './context';
+
+/** Which `popups` entry renders a widget session: checkbox and picture presses have their own. */
+function widgetEntry(
+  kind: ContentControlWidgetSession['kind']
+): keyof Pick<
+  DocxEditorPopups,
+  'contentControlWidget' | 'contentControlCheckbox' | 'contentControlPicture'
+> {
+  if (kind === 'checkbox') return 'contentControlCheckbox';
+  if (kind === 'picture') return 'contentControlPicture';
+  return 'contentControlWidget';
+}
+
 export const ConfiguredEnginePopups = defineComponent({
   name: 'DocxConfiguredEnginePopups',
   setup() {
@@ -16,17 +29,27 @@ export const ConfiguredEnginePopups = defineComponent({
     watch(
       [
         editor,
-        () =>
-          config.value?.contentControlWidget === undefined
-            ? undefined
-            : config.value.contentControlWidget !== false,
+        () => config.value?.contentControlWidget !== undefined,
+        () => config.value?.contentControlCheckbox !== undefined,
+        () => config.value?.contentControlPicture !== undefined,
       ],
-      ([instance, renderer], _old, onCleanup) => {
-        if (!instance || renderer === undefined) return;
+      ([instance, widgetConfigured, checkboxConfigured, pictureConfigured], _old, onCleanup) => {
+        if (!instance || (!widgetConfigured && !checkboxConfigured && !pictureConfigured)) return;
+        // The registration names only the kinds a configured entry can render, so an omitted
+        // `contentControlCheckbox` leaves checkbox presses to the engine's own toggle and an
+        // omitted `contentControlPicture` leaves picture presses to the engine's file picker.
+        const kinds: ContentControlWidgetSession['kind'][] = [
+          ...(widgetConfigured
+            ? (['dropdown', 'comboBox', 'date', 'buildingBlockGallery'] as const)
+            : []),
+          ...(checkboxConfigured ? (['checkbox'] as const) : []),
+          ...(pictureConfigured ? (['picture'] as const) : []),
+        ];
         const dispose = instance.setContentControlWidgetChrome(
           {
+            kinds,
             onRequest: (session) => {
-              if (config.value?.contentControlWidget === false) {
+              if (config.value?.[widgetEntry(session.kind)] === false) {
                 session.cancel();
                 return;
               }
@@ -86,8 +109,12 @@ export const ConfiguredEnginePopups = defineComponent({
       { immediate: true }
     );
     return () => [
-      widget.value && config.value?.contentControlWidget
-        ? renderPopup(config.value.contentControlWidget, { session: widget.value }, widget.value)
+      widget.value && config.value?.[widgetEntry(widget.value.kind)]
+        ? renderPopup(
+            config.value[widgetEntry(widget.value.kind)]!,
+            { session: widget.value },
+            widget.value
+          )
         : null,
       invalid.value && config.value?.invalidTextFormField
         ? renderPopup(config.value.invalidTextFormField, { session: invalid.value }, invalid.value)

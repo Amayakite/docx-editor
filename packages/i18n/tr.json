@@ -678,7 +678,18 @@
       "picture": "Resim",
       "plainText": "Düz metin",
       "repeatingSection": "Yinelenen bölüm",
-      "richText": "Zengin metin"
+      "richText": "Zengin metin",
+      "buildingBlockGallery": null
+    },
+    "calendar": {
+      "nextMonth": null,
+      "previousMonth": null,
+      "today": null,
+      "month": null,
+      "year": null
+    },
+    "gallery": {
+      "empty": null
     }
   },
   "notes": {

@@ -119,6 +119,8 @@ Each popup receives the props listed here.
 | `notesContextMenu`       | `DocxEditorNotesContextMenuProps`          |
 | `notePreview`            | `DocxEditorNotePreviewProps`               |
 | `contentControlWidget`   | `{ session: ContentControlWidgetSession }` |
+| `contentControlCheckbox` | `{ session: ContentControlWidgetSession }` |
+| `contentControlPicture`  | `{ session: ContentControlWidgetSession }` |
 | `invalidTextFormField`   | `{ session: InvalidTextFormFieldSession }` |
 
 Omitted entries retain existing behavior, including native widget and invalid-field
@@ -156,6 +158,185 @@ A `Field` represents the labeled row; `asChild` does not adapt input value event
 Page Setup dimensions use twips: 1,440 per inch. Paragraph also exposes mixed-selection state.
 See [React hooks](/docs/2.x/react/hooks#dialog-draft-contexts) or
 [Vue composables](/docs/2.x/vue/composables#dialog-draft-contexts) for types.
+
+## Compose the value pop-up
+
+Use `DocxEditorContentControlWidget` to customize content-control popups. Omit
+children to keep the default UI, or pass parts to replace its contents. The root
+handles placement, Escape, outside clicks, focus return, and Tab wrapping.
+
+Choose an entry in the editor's `popups` prop:
+
+| Entry                    | Controls                                              | Default when omitted |
+| ------------------------ | ----------------------------------------------------- | -------------------- |
+| `contentControlWidget`   | Dropdown, combo box, date, and building block gallery | List or calendar     |
+| `contentControlCheckbox` | Checkbox                                              | Toggle immediately   |
+| `contentControlPicture`  | Picture                                               | Open a file dialog   |
+
+### Arrange parts
+
+Check `session.kind` before rendering date-specific parts. Keep the default root
+for other kinds. This example styles the grid and uses `asChild` to replace the
+Today button's element while retaining its behavior.
+
+<FrameworkTabs variant="block">
+<Framework value="react">
+
+Create `BrandedWidget.tsx`:
+
+```tsx
+import {
+  DocxEditorContentControlWidget as Widget,
+  type DocxEditorContentControlWidgetProps,
+} from '@docx-editor.dev/react';
+
+export function BrandedWidget({ session }: DocxEditorContentControlWidgetProps) {
+  if (session.kind !== 'date') return <Widget session={session} />;
+
+  return (
+    <Widget session={session} className="brand-popup">
+      <Widget.Header />
+      <Widget.Weekdays />
+      <Widget.Grid className="brand-grid" />
+      <Widget.Today asChild>
+        <button type="button" className="brand-button">
+          Pick today
+        </button>
+      </Widget.Today>
+      <Widget.Input />
+      <Widget.Error />
+      <Widget.Footer />
+    </Widget>
+  );
+}
+```
+
+Import `BrandedWidget` and register it on your editor:
+
+```tsx
+<DocxEditor document={source} popups={{ contentControlWidget: BrandedWidget }} />
+```
+
+</Framework>
+<Framework value="vue">
+
+Create `BrandedWidget.vue`:
+
+```vue
+<script setup lang="ts">
+import {
+  DocxEditorContentControlWidget as Widget,
+  type DocxEditorContentControlWidgetProps,
+} from '@docx-editor.dev/vue';
+
+defineProps<DocxEditorContentControlWidgetProps>();
+</script>
+
+<template>
+  <Widget v-if="session.kind === 'date'" :session="session" class-name="brand-popup">
+    <Widget.Header />
+    <Widget.Weekdays />
+    <Widget.Grid class-name="brand-grid" />
+    <Widget.Today as-child>
+      <button type="button" class="brand-button">Pick today</button>
+    </Widget.Today>
+    <Widget.Input />
+    <Widget.Error />
+    <Widget.Footer />
+  </Widget>
+  <Widget v-else :session="session" />
+</template>
+```
+
+Import `BrandedWidget` and register it on your editor:
+
+```vue
+<DocxEditor :document="source" :popups="{ contentControlWidget: BrandedWidget }" />
+```
+
+</Framework>
+</FrameworkTabs>
+
+`source` is your existing editor document. Import `DocxEditor` from your framework's
+package. Parts accept `className`, `style`, `hidden`, and `asChild` and forward
+`id`, `aria-*`, and `data-*`. With `asChild`, provide one element; custom components
+must forward its props, events, and ref.
+
+| Task                               | Parts                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------ |
+| Render a complete date picker      | `Calendar`                                                                     |
+| Arrange calendar navigation        | `Header`, `PreviousMonth`, `Title`, `NextMonth`, `Navigation`, `Month`, `Year` |
+| Arrange dates and entry            | `Weekdays`, `Grid`, `Day`, `Today`, `Input`                                    |
+| Render choices or a picture picker | `List`, `Item`, `Picture`                                                      |
+| Show errors and actions            | `Error`, `Footer`, `Apply`, `Cancel`                                           |
+
+`Header` includes month and year selectors. `Footer` includes Cancel and Apply.
+Keep `Error` in custom arrangements so users can see rejected writes.
+
+### Add a custom action
+
+Call `useContentControlWidget()` in a child of `Widget`. This React button commits
+a date through the same validation as the packaged picker:
+
+```tsx
+import { useContentControlWidget } from '@docx-editor.dev/react';
+
+function UseDepartureDate() {
+  const { isEnabled, apply } = useContentControlWidget();
+  return (
+    <button type="button" disabled={!isEnabled} onClick={() => apply('2026-12-01')}>
+      Depart December 1
+    </button>
+  );
+}
+```
+
+Place `<UseDepartureDate />` inside the date arrangement above. In Vue, import the
+composable from `@docx-editor.dev/vue`; reactive state uses refs, which templates
+unwrap automatically.
+
+- `setValue(value)` updates the draft. `apply()` commits it; `apply(value)` commits
+  an explicit value. A refused write returns `false`, keeps the popup open, and
+  sets `refused`. `cancel()` closes without applying the draft.
+- Dates use `YYYY-MM-DD`. `dateText`, `setDateText`, and `applyDateText` handle
+  regional numeric entry using `session.locale`.
+- Lists expose `items`. Pass an entry to `Item`, or call `apply(item.value)`.
+  Gallery values name blocks in the document's glossary.
+- Pictures expose `accept` and `replaceImage(fileOrBytes)`. Replacement returns
+  `Promise<boolean>` and preserves the drawing's size.
+- Checkbox values are `'true'` and `'false'`. A checkbox root without children
+  toggles immediately; custom children must call `apply`.
+
+### Style without replacing a renderer
+
+Use `--doc-*` tokens for colors and `data-docx-part` attributes for individual
+parts. These hooks work with the engine, React, and Vue renderers. Load your
+stylesheet after the editor stylesheet.
+
+```css
+.docx-editor [data-docx-part='day'] {
+  border-radius: 50%;
+}
+.docx-editor [data-docx-part='item'][aria-selected='true'] {
+  font-weight: 600;
+}
+```
+
+Calendar cells expose `data-selected`, `data-today`, and `data-other-month`.
+Popup roots expose `data-placement="top"` or `"bottom"`.
+
+### Build a custom grid or root
+
+Prefer packaged parts to retain keyboard behavior. For a custom grid, use
+`calendar.days`, `focusDay`, and `calendarDateForKey` from
+`@docx-editor.dev/core/editor`. Preserve grid roles, selected states, and one
+focusable day. For a custom list, use `listId` and `listNavigation` to preserve
+listbox relationships, typeahead, and roving focus.
+
+For a separate popup root, call `observeContentControlPopup(panel, session.anchor)`
+and run its returned cleanup on close. Use `contentControlPopupKeyDown` for Escape
+and Tab wrapping. You must also handle outside clicks, focus return, and
+`session.signal` cancellation. The packaged root handles these requirements.
 
 ## Connect a custom input
 
