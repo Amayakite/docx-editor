@@ -141,6 +141,8 @@ import type { BodyPageFieldContext } from './field-page-furniture.ts';
 import { createSectionPageFurniture } from './section-page-furniture.ts';
 import { createPageContentInsets, registerOverflowPageShell } from './page-furniture-insets.ts';
 import { convergenceTailShiftAllowed } from './page-reuse-guards.ts';
+import { pageBorderFrame } from './page-border-frame.ts';
+import { layoutPassContextKey } from './layout-pass-context-key.ts';
 import {
   attachContentControlBoundaries,
   contentControlContextToken,
@@ -497,6 +499,9 @@ export function layoutSemanticDocument(
       geometry,
       furniture,
       sectionColumns: section?.properties.columns ?? DEFAULT_SECTION_PROPERTIES.columns,
+      ...(section?.properties.pageBorders
+        ? { sectionPageBorders: section.properties.pageBorders }
+        : {}),
       ...(sectionNumbering?.fmt ? { bodyPageNumberFormat: sectionNumbering.fmt } : {}),
     });
     const numbering = sectionNumbering;
@@ -876,24 +881,17 @@ function layoutBlocksPass(
   // `pageIndexStart` on (conservative, one full pass).
   const reserveKeyBound = session?.previous ? session.previous.pages.length + 1 : Infinity;
   const columnRegionBottom = options.columnRegionBottom;
-  const columnsContext = `|cols:${columns.widths.join(',')};${columns.gaps.join(',')};${columns.separator ? 1 : 0}${columnRegionBottom !== undefined ? `;bal:${columnRegionBottom}` : ''}`;
-  // Body line ids are paragraph-local, so a changed line count in an earlier section does
-  // not invalidate this section. Geometry and flow start still do. The document page index
-  // is deliberately NOT here — numbers re-project at finalize and shells renumber at remap;
-  // keying on it re-laid every section below an Enter that added one page. The one real
-  // dependence, page PARITY, is checked by `comparable` through the session parity fields.
-  //
-  // The producer is compared BESIDE the context (`session.producer`), not embedded in it:
-  // it carries the control token, which runs to kilobytes on a control-heavy document, and
-  // embedding it copied that token into every section's context string on every pass.
   const continuedInsets = options.continuedPageInsets;
-  // The host sheet's box is an INPUT to this section's flow, so a host whose own variant moved
-  // must not let this section resume a flow measured against the box it used to have.
-  const continuedContext = continuedInsets
-    ? `|cont:${continuedInsets.top},${continuedInsets.height}`
-    : '';
-  const contextFor = (notesReserveKey: string): string =>
-    `${geometry.width}x${geometry.height}|${geometry.margin.top},${geometry.margin.right},${geometry.margin.bottom},${geometry.margin.left}|fs:${flowStartY},${spaceBeforeCarry}${continuedContext}${furnitureContext}${notesReserveKey}${columnsContext}`;
+  const contextFor = layoutPassContextKey({
+    geometry,
+    flowStartY,
+    spaceBeforeCarry,
+    continuedInsets,
+    furnitureContext,
+    columns,
+    columnRegionBottom,
+    sectionPageBorders: options.sectionPageBorders,
+  });
   const context = contextFor(
     notesReserveContextKey(pageBottomReserves, pageIndexStart, reserveKeyBound)
   );
@@ -920,6 +918,7 @@ function layoutBlocksPass(
     contentWidth: contentWidthForReflow,
     insetsFor,
     pageCount: () => pages.length,
+    ...(options.sectionPageBorders ? { pageBorders: options.sectionPageBorders } : {}),
   });
   const { pageBox, furnitureFor, overflowShellAt } = sectionFurniture;
 
@@ -1590,6 +1589,9 @@ function layoutBlocksPass(
     const footer = furnitureFor('footer', index, box);
     const { usedBottom, hasBodyPageFields } = summarizeFlushedPage(pageFragments, columnRegionTop);
     const insets = insetsFor(index);
+    // `index` is SECTION-local here (multi-section renumbers through `remapPage`), which is
+    // exactly what `w:display` asks about: the first page of this section, not of the document.
+    const borderFrame = pageBorderFrame(options.sectionPageBorders, geometry, index === 0);
     pages.push({
       id: `page-${index}`,
       index,
@@ -1612,6 +1614,7 @@ function layoutBlocksPass(
             })),
           }
         : {}),
+      ...(borderFrame ? { pageBorders: borderFrame } : {}),
       ...(pendingAnchoredDrawings.length > 0
         ? { anchoredDrawings: sortDrawingsForPaint(pendingAnchoredDrawings) }
         : {}),
@@ -2057,6 +2060,9 @@ function layoutBlocksPass(
           usedPageParity,
           markPageCount: mark.pageCount,
           continuedInsets: continuedInsets !== undefined,
+          firstPageBorders:
+            options.sectionPageBorders !== undefined &&
+            options.sectionPageBorders.display !== 'allPages',
           hasNoteReserves: pageBottomReserves !== undefined,
           hasExclusionZones: (options.drawingExclusionZonesByPage?.size ?? 0) > 0,
         });
