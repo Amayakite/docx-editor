@@ -319,7 +319,7 @@ describe('structural revision resolution', () => {
 
   test('a refused kind leaves the tree byte-identical', () => {
     const part = load(
-      `<w:tbl><w:tr><w:tc><w:tcPr><w:cellIns w:id="1" w:author="QA" w:date="${QA.date}"/></w:tcPr>` +
+      `<w:tbl><w:tr><w:tc><w:tcPr><w:cellMerge w:id="1" w:author="QA" w:date="${QA.date}" w:vMerge="invalid"/></w:tcPr>` +
         `<w:p>${run('cell')}</w:p></w:tc></w:tr></w:tbl>`
     );
     const before = xml(part);
@@ -328,10 +328,9 @@ describe('structural revision resolution', () => {
   });
 
   test('one refused site refuses the whole revision, not just that site', () => {
-    // A tracked row insertion is `w:trPr/w:ins` on the row plus `w:cellIns` on every cell,
-    // all sharing one triple. Resolving the inline half alone would leave the row half-tracked.
+    // A duplicate row marker is ambiguous; its shared inline revision must remain intact.
     const part = load(
-      `<w:tbl><w:tr><w:trPr><w:ins w:id="1" w:author="QA" w:date="${QA.date}"/></w:trPr>` +
+      `<w:tbl><w:tr><w:trPr><w:ins w:id="1" w:author="QA" w:date="${QA.date}"/><w:ins w:id="1" w:author="QA" w:date="${QA.date}"/></w:trPr>` +
         `<w:tc><w:p>${wrap('ins', QA, run('cell'))}</w:p></w:tc></w:tr></w:tbl>`
     );
     expect(refuse(part, accept(QA))).toBe('unsupported-revision');
@@ -407,7 +406,7 @@ describe('accept-all and reject-all', () => {
   test('accept-all refuses when any revision in the document is a refused kind', () => {
     const part = load(
       `<w:p>${wrap('ins', QA, run('inline'))}</w:p>` +
-        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev" w:date="${DEV.date}"/></w:trPr>` +
+        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev" w:date="${DEV.date}"/><w:del w:id="9" w:author="Dev" w:date="${DEV.date}"/></w:trPr>` +
         '<w:tc><w:p/></w:tc></w:tr></w:tbl>'
     );
     expect(refuse(part, { op: 'acceptAllRevisions' })).toBe('unsupported-revision');
@@ -421,7 +420,7 @@ describe('accept-all and reject-all', () => {
         `<w:tc><w:tcPr><w:cellIns w:id="8" w:author="Row"/></w:tcPr>` +
         `<w:p>${run('tracked row')}</w:p></w:tc></w:tr></w:tbl></w:footnote>` +
         `<w:footnote w:id="2"><w:p>${wrap('ins', QA, run('sibling'))}</w:p>` +
-        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev"/></w:trPr>` +
+        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev"/><w:del w:id="9" w:author="Dev"/></w:trPr>` +
         `<w:tc><w:p>${run('unsupported')}</w:p></w:tc></w:tr></w:tbl></w:footnote>`
     );
     const target = part.root.children.find(
@@ -441,7 +440,7 @@ describe('accept-all and reject-all', () => {
   test('an unsupported revision inside a scoped note refuses atomically', () => {
     const part = loadNotes(
       `<w:footnote w:id="1"><w:p>${wrap('ins', QA, run('target'))}</w:p>` +
-        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev"/></w:trPr>` +
+        `<w:tbl><w:tr><w:trPr><w:del w:id="9" w:author="Dev"/><w:del w:id="9" w:author="Dev"/></w:trPr>` +
         `<w:tc><w:p>${run('incomplete')}</w:p></w:tc></w:tr></w:tbl></w:footnote>` +
         `<w:footnote w:id="2"><w:p>${wrap('ins', QA, run('sibling'))}</w:p></w:footnote>`
     );
@@ -556,7 +555,7 @@ describe('a run of removed paragraph marks', () => {
     expect(out).not.toContain('before after');
   });
 
-  test('a table is a boundary: the content stays in front of it', () => {
+  test('a removed mark before a table merges into its first cell, as in Word', () => {
     // `followed` looked at any later paragraph, so the text merged into the one AFTER the
     // table and arrived behind it — in a place the reader never put it.
     const table =
@@ -566,7 +565,9 @@ describe('a run of removed paragraph marks', () => {
       '</w:tc></w:tr></w:tbl>';
     const part = load(delMark('before ') + table + `<w:p>${run('after')}</w:p>`);
     const out = xml(apply(part, { op: 'acceptAllRevisions' }));
-    expect(out.indexOf('before ')).toBeLessThan(out.indexOf('<w:tbl'));
+    expect(out.indexOf('before ')).toBeGreaterThan(out.indexOf('<w:tc>'));
+    expect(out.indexOf('before ')).toBeLessThan(out.indexOf('cell'));
+    expect(out.indexOf('before ')).toBeLessThan(out.indexOf('</w:tc>'));
     expect(out).not.toContain('before after');
   });
 });

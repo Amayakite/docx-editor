@@ -15,22 +15,10 @@ export {
 } from './forms-protection.ts';
 import { protectedTextFormEditRefusal } from './tree-op-field-results.ts';
 import { textFormFieldForEdit, textFormFieldsOf } from './text-form-fields.ts';
-// Writing content controls: values, metadata, insertion, removal — and the locks that refuse.
-//
-// EVERY refusal in this module is a STORE refusal. A widget that greys a button out is a
-// courtesy; the guarantee is that the op path itself says no, so a keyboard gesture, a toolbar
-// command and a script all meet the same answer. That is why the lock check runs in validation
-// and not beside the surface that happens to be mounted.
-//
-// A VALUE IS TYPED. A dropdown takes an item its own list declares, a combo box takes anything,
-// a date takes an ISO date and writes `@w:fullDate` beside the formatted content it paints, and
-// a checkbox writes the glyph its own `w14:checkbox` declares. Offering a value of the wrong
-// shape is `typeMismatch` rather than a coerced write, because a control that quietly accepted
-// the wrong kind of value would produce a document Word reads differently than the caller does.
-//
-// A BOUND CONTROL IS PRESERVED AND REFUSED. `w:dataBinding` names a custom XML part this engine
-// does not resolve; writing the content while the binding still points elsewhere would produce
-// a document whose two answers disagree the moment Word opens it.
+// Content-control writes enforce locks in the store for UI and script callers alike.
+// Values retain their declared type: list items, ISO dates, or checkbox glyphs.
+// Bound controls are preserved and refused; writing only their content would disagree
+// with the unresolved custom XML binding when Word opens the document.
 
 import {
   contentControlContentNodeOf,
@@ -70,7 +58,7 @@ import {
   type ParagraphOffsetIndex,
 } from './tree-op-segments.ts';
 import { scopedRevisionRoot } from './tree-op-revision-scope.ts';
-import { removedRowsForRevisionDecision, type RevisionOpAction } from './tree-op-revisions.ts';
+import { revisionStructuralReach, type RevisionOpAction } from './tree-op-revisions.ts';
 import type {
   RevisionAddress,
   TreeDocOp,
@@ -935,33 +923,38 @@ function resolveRevisionReach(
     }
   };
   walk(root, []);
-  // A complete tracked-row decision removes the ROW, not its marker. Ask every control in that
-  // exact row—including sibling cells the marker walk never enters—with ancestor locks in force.
-  const removedRowIds = new Set(
-    removedRowsForRevisionDecision(part, action, revision, {
-      ...(localName === undefined ? {} : { localName }),
-      ...(siteNodeIds === undefined ? {} : { siteNodeIds }),
-      ...(scopeRootId === undefined ? {} : { scopeRootId }),
-    }).map((row) => row.id)
-  );
-  const walkRemovedRows = (node: OoxmlNode, controls: readonly OoxmlNode[]): void => {
-    if (node.kind === 'textValue' || removedRowIds.size === 0) return;
-    if (removedRowIds.delete(node.id)) {
+  // Markers can sit outside the cells and controls whose content or geometry they change.
+  const structural = revisionStructuralReach(part, action, revision, {
+    ...(localName === undefined ? {} : { localName }),
+    ...(siteNodeIds === undefined ? {} : { siteNodeIds }),
+    ...(scopeRootId === undefined ? {} : { scopeRootId }),
+  });
+  const walkStructural = (node: OoxmlNode, controls: readonly OoxmlNode[]): void => {
+    if (node.kind === 'textValue' || structural.size === 0) return;
+    const removed = structural.get(node.id);
+    if (removed !== undefined) {
+      for (let index = 0; index < controls.length; index += 1) {
+        touches.push({
+          control: controls[index]!,
+          locks: locksOf(controls.slice(0, index + 1)),
+          removed: false,
+          discarded: false,
+        });
+      }
       for (const entry of contentControlsIn(node)) {
         touches.push({
           control: entry.node,
           locks: [...locksOf(controls), ...locksOf([...entry.ancestors, entry.node])],
-          removed: true,
+          removed,
           discarded: false,
         });
       }
-      return;
+      if (removed) return;
     }
-    for (const child of node.children) {
-      walkRemovedRows(child, child.kind === 'contentControl' ? [...controls, child] : controls);
-    }
+    for (const child of node.children)
+      walkStructural(child, child.kind === 'contentControl' ? [...controls, child] : controls);
   };
-  walkRemovedRows(root, []);
+  walkStructural(root, []);
   return { touches, unprotected };
 }
 
@@ -977,6 +970,7 @@ const REVISION_LOCAL_NAMES: ReadonlySet<string> = new Set([
   'rPrChange',
   'pPrChange',
   'tblPrChange',
+  'tblPrExChange',
   'trPrChange',
   'tcPrChange',
   'sectPrChange',
@@ -1003,7 +997,11 @@ function isRevisionNode(
       (entry) => entry.localName === name && entry.namespaceUri === WML_NAMESPACE_URI
     )?.value;
   if (attribute('id') !== revision.id) return false;
-  if (attribute('author') !== revision.author) return false;
+  if (
+    (attribute('author') ?? (node.localName === 'tblGridChange' ? '' : undefined)) !==
+    revision.author
+  )
+    return false;
   if (revision.date !== undefined && attribute('date') !== revision.date) return false;
   return true;
 }
