@@ -1,3 +1,4 @@
+import { ordinaryMoveRanges } from '../store/store/revision-move-ranges.ts';
 import type {
   EditorModuleRegistry,
   ReviewDisplayMode,
@@ -5,7 +6,7 @@ import type {
   ReviewModuleContribution,
 } from '../contracts/modules.ts';
 
-import { partOfNodeId } from './surface-scope.ts';
+import { partOfNodeId, storyScopeOfNodeId } from './surface-scope.ts';
 import { stylesPartOf } from '../store/package/ooxml-indexes.ts';
 import { planRevisionBatch, type RevisionBatchResult } from '../store/store/revision-batch.ts';
 import { commandProtectionRefusal } from './command-protection.ts';
@@ -105,6 +106,16 @@ export function createReviewCommands(deps: ReviewCommandDependencies) {
           .map(reviewItemKey)
     );
     const scopes = new Map<string, { scope: StoryScope; part: OoxmlPart; keys: string[] }>();
+    const unfilteredDocument = command.scope === 'document' && command.keys === undefined;
+    if (unfilteredDocument) {
+      const session = deps.surface()!.session;
+      for (const part of session.storyParts())
+        scopes.set(part.name, {
+          scope: storyScopeOfNodeId(session, part.root.id, { kind: 'body' }),
+          part,
+          keys: [],
+        });
+    }
     for (const item of items) {
       const scope = deps.scope(item);
       const part = partOfNodeId(deps.surface()!.session, revisionSiteNodeIdsOf(item)[0]);
@@ -126,7 +137,7 @@ export function createReviewCommands(deps: ReviewCommandDependencies) {
     const partOps: { partName: string; ops: readonly TreeDocOp[] }[] = [];
     let remaining = 0;
     for (const { scope, part, keys } of scopes.values()) {
-      const plan = planRevisionBatch(part, command.action, keys);
+      const plan = planRevisionBatch(part, command.action, unfilteredDocument ? undefined : keys);
       resolved.push(...plan.result.resolved);
       skipped.push(...plan.result.skipped);
       remaining += plan.result.remaining;
@@ -182,10 +193,10 @@ export function createReviewCommands(deps: ReviewCommandDependencies) {
         (!Array.isArray(command.keys) || command.keys.some((key) => typeof key !== 'string')))
     )
       return { ok: false, code: 'invalidArgs', reason: 'invalid bulk revision selection' };
-    const { result } = bulkPlan(command);
+    const { result, groups, partOps } = bulkPlan(command);
     if (command.unsupported === 'fail' && result.skipped.length)
       return { ok: false, code: 'unsupported', reason: 'some selected changes cannot be resolved' };
-    if (!result.resolved.length)
+    if (!result.resolved.length && !groups.length && !partOps.length)
       return {
         ok: false,
         code: result.skipped.length ? 'unsupported' : 'notFound',
@@ -353,6 +364,15 @@ function resolutionOps(
 ): TreeDocOp[] {
   const op = action === 'accept' ? 'acceptRevision' : 'rejectRevision';
   if (!part) return [];
+  // A grouped row decision can remove later constituents. Resolve its sites
+  // together, with the same dependency preflight as the bulk command.
+  if (
+    item.revisionKind === 'structural' ||
+    ordinaryMoveRanges(part.root).length > 0 ||
+    (item.revisionKind === 'format' && revisionSiteNodeIdsOf(item).length > 1)
+  ) {
+    return [...planRevisionBatch(part, action, [reviewItemKey(item)]).ops];
+  }
   const nodeIds = new Set(revisionSiteNodeIdsOf(item));
   const operations = new Map<
     string,
@@ -375,8 +395,7 @@ function resolutionOps(
         (address.date ?? '') === (attr('date') ?? '')
     );
     if (!revision) continue;
-    // A tracked row is one decision across its `del` and `cellDel` markers.
-    const localName = item.revisionKind === 'structural' ? undefined : site.node.localName;
+    const localName = site.node.localName;
     const key = JSON.stringify([revision, localName]);
     const known = operations.get(key);
     if (known) known.siteNodeIds.push(site.node.id);

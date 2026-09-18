@@ -1,3 +1,9 @@
+import { ordinaryMoveRanges } from '../store/store/revision-move-ranges.ts';
+import {
+  reviewItemKey,
+  revisionSiteNodeIdsOf,
+  type ReviewRevisionItem,
+} from '../store/store/review-items.ts';
 import type { PlannedOperation } from './plan-types.ts';
 import { revisionItemsOf } from '../store/store/review-reads.ts';
 import { planRevisionBatch, type RevisionBatchResult } from '../store/store/revision-batch.ts';
@@ -169,4 +175,29 @@ export function planRevisionDecision(
     ops: revisionCollectionOps(operation, target.reads),
     answer: () => ({ kind: 'applied' }),
   };
+}
+
+/** Resolve grouped table sites together; a row removal can consume later constituents. */
+export function revisionItemOps(
+  reads: AutomationStoryReads,
+  item: ReviewRevisionItem,
+  action: 'accept' | 'reject'
+): readonly TreeDocOp[] {
+  if (
+    item.revisionKind === 'structural' ||
+    ordinaryMoveRanges(reads.root).length > 0 ||
+    (item.revisionKind === 'format' && revisionSiteNodeIdsOf(item).length > 1)
+  ) {
+    const decision = planRevisionBatch(
+      reads.part,
+      action,
+      [reviewItemKey(item)],
+      reads.story.kind === 'note' ? reads.root : undefined
+    );
+    return decision.result.skipped.length ? [] : decision.ops;
+  }
+  return item.addresses.map((revision) => ({
+    op: action === 'accept' ? 'acceptRevision' : 'rejectRevision',
+    revision,
+  }));
 }

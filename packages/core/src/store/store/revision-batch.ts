@@ -1,3 +1,7 @@
+import { retainedNestedRowSites } from './revision-table-preserve-nested.ts';
+import { unboundTableHistories } from './revision-table-unbound-history.ts';
+import { deferredTableGridSites } from './revision-table-grid-history.ts';
+import { planOrdinaryMoves } from './revision-move-ranges.ts';
 import {
   tableRevisionContentTarget,
   tableRevisionRemovals,
@@ -13,6 +17,7 @@ import { revisionItemsOf } from './review-reads.ts';
 import { reviewItemKey, revisionSiteNodeIdsOf, type ReviewRevisionItem } from './review-items.ts';
 import {
   collectRevisionSites,
+  resolveRevisions,
   namedMoveRanges,
   orphanMoveDestinationSites,
 } from './tree-op-revisions.ts';
@@ -30,6 +35,7 @@ export interface RevisionBatchEntry {
 export type RevisionBatchSkipReason =
   | 'unsupported-revision'
   | 'incomplete-group'
+  | 'retained-structure'
   | 'unknown-revision';
 
 /** Outcome of one selected-set decision. Counts refer to review decisions, not XML markers. @public */
@@ -54,9 +60,22 @@ export function planRevisionBatch(
   const root = scopeRoot ?? part.root;
   const scopedPart = root.kind === 'textValue' ? part : { ...part, root };
   const items = revisionItemsOf(scopedPart);
+  const auxiliaryIds =
+    keys === undefined
+      ? [...unboundTableHistories(scopedPart, collectRevisionSites(scopedPart))]
+      : [];
+  const cleanup: TreeDocOp[] = auxiliaryIds.length
+    ? [
+        {
+          op: 'acceptAllRevisions',
+          siteNodeIds: auxiliaryIds,
+          ...(scopeRoot ? { scopeRootId: scopeRoot.id } : {}),
+        },
+      ]
+    : [];
   if (keys?.length === 0 || items.length === 0) {
     return {
-      ops: [],
+      ops: cleanup,
       result: {
         resolved: [],
         skipped: [...new Set(keys ?? [])].map((key) => ({ key, reason: 'unknown-revision' })),
@@ -72,6 +91,12 @@ export function planRevisionBatch(
     if (item) for (const id of revisionSiteNodeIdsOf(item)) selectedSites.add(id);
   }
   const sites = collectRevisionSites(scopedPart);
+  const movePlan = planOrdinaryMoves(root, sites, selectedSites, action);
+  for (const id of movePlan.selected) selectedSites.add(id);
+  for (const item of items) {
+    const ids = revisionSiteNodeIdsOf(item);
+    if (ids.length && ids.every((id) => selectedSites.has(id))) selected.add(reviewItemKey(item));
+  }
   const orphanDestinations = orphanMoveDestinationSites(root, sites);
   const indices = new Map(sites.map((site, index) => [site.node.id, index]));
   const parents = sites.map((_, index) => index);
@@ -85,6 +110,10 @@ export function planRevisionBatch(
   const join = (a: number, b: number): void => {
     parents[find(b)] = find(a);
   };
+  for (const dependency of movePlan.dependencies) {
+    const own = dependency.flatMap((id) => (indices.has(id) ? [indices.get(id)!] : []));
+    for (const index of own) join(own[0]!, index);
+  }
   const owners = new Map<string, number>();
   for (const item of items) {
     const own = revisionSiteNodeIdsOf(item).flatMap((id) => {
@@ -210,7 +239,8 @@ export function planRevisionBatch(
     (site, index) => selectedSites.has(site.node.id) && !reasons.has(find(index))
   );
   let removedContainer = false;
-  for (const [id, markerIds] of tableRevisionRemovals(part, eligible, action)) {
+  const eligibleRemovals = tableRevisionRemovals(part, eligible, action);
+  for (const [id, markerIds] of eligibleRemovals) {
     if (owners.has(id)) continue;
     const owner = indices.get(markerIds[0]!);
     if (owner !== undefined) {
@@ -228,6 +258,18 @@ export function planRevisionBatch(
   const resolved: RevisionBatchEntry[] = [];
   const skipped: RevisionBatchResult['skipped'][number][] = [];
   const acceptedSites = new Set<string>();
+  const retainedRows = new Set(retainedNestedRowSites(part, sites, action));
+  // A nested row can remain pending only if no eligible ancestor action removes it.
+  for (const id of retainedRows) {
+    let ancestor = parentNodeOf(part, id);
+    while (ancestor) {
+      if (eligibleRemovals.has(ancestor.id)) {
+        retainedRows.delete(id);
+        break;
+      }
+      ancestor = parentNodeOf(part, ancestor.id);
+    }
+  }
   for (const key of selected) {
     const item = byKey.get(key);
     if (!item) {
@@ -250,20 +292,54 @@ export function planRevisionBatch(
     if (!ids.length) reason = 'unsupported-revision';
     if (reason) skipped.push({ key, reason, revision: entry });
     else {
-      resolved.push(entry);
-      for (const id of ids) acceptedSites.add(id);
+      if (ids.some((id) => retainedRows.has(id)))
+        skipped.push({ key, reason: 'retained-structure', revision: entry });
+      else resolved.push(entry);
+      for (const id of ids) if (!retainedRows.has(id)) acceptedSites.add(id);
+    }
+  }
+  const gridCandidates = deferredTableGridSites(part, sites, acceptedSites);
+  const deferredGrids = new Set<string>();
+  for (const item of items) {
+    const ids = revisionSiteNodeIdsOf(item);
+    // Only a grouped row decision carries deferred grid metadata. A standalone
+    // grid request is explicit and must retain its normal resolution semantics.
+    if (item.formattingKind !== 'tblGridChange' && ids.length > 1)
+      for (const id of ids) if (gridCandidates.has(id)) deferredGrids.add(id);
+  }
+  const siteNodeIds = [...acceptedSites].filter(
+    (id) => !movePlan.implicit.has(id) && !deferredGrids.has(id)
+  );
+  let remaining = items.length - resolved.length;
+  // Removing a row can make two formerly separated formatting groups adjacent.
+  // Partial outcomes must count the resulting queue, not subtract from the old one.
+  if (remaining > 0 && siteNodeIds.length) {
+    // Resolution transfers its mutable node index to the rebuilt root. Keep the
+    // original root's index and allocator state untouched during pure preflight.
+    const previewPart = { ...part, root: { ...part.root } };
+    const preview = resolveRevisions(previewPart, action, undefined, {
+      siteNodeIds,
+      ...(scopeRoot ? { scopeRootId: scopeRoot.id } : {}),
+    });
+    if (preview.ok && preview.part) {
+      const afterRoot = scopeRoot ? findNode(preview.part, scopeRoot.id) : preview.part.root;
+      remaining =
+        afterRoot && afterRoot.kind !== 'textValue'
+          ? revisionItemsOf({ ...preview.part, root: afterRoot }).length
+          : 0;
     }
   }
   return {
     ops: acceptedSites.size
       ? [
+          ...cleanup,
           {
             op: action === 'accept' ? 'acceptAllRevisions' : 'rejectAllRevisions',
-            siteNodeIds: [...acceptedSites],
+            siteNodeIds,
             ...(scopeRoot ? { scopeRootId: scopeRoot.id } : {}),
           },
         ]
-      : [],
-    result: { resolved, skipped, remaining: items.length - resolved.length },
+      : cleanup,
+    result: { resolved, skipped, remaining },
   };
 }

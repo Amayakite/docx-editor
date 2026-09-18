@@ -8,7 +8,7 @@
 // author had in mind.
 //
 // WHAT IS LEFT OUT OF THE LISTING IS LEFT OUT ON PURPOSE. A structural revision whose exact Word
-// subtype this protocol cannot name — a row, a cell, a section, the table grid — is omitted from
+// subtype this protocol cannot name — such as cell-structure changes — is omitted from
 // `revisionReads`, because an object whose `type` we cannot publish is worse than an absence.
 // Collection membership is therefore not the collection decision set: `acceptAll` / `rejectAll`
 // still resolve every store-resolvable revision, including a complete tracked row
@@ -108,8 +108,16 @@ export function revisionItemsInStory(reads: AutomationStoryReads): readonly Revi
 export function revisionReads(reads: AutomationStoryReads): readonly AutomationRevisionRead[] {
   const found: AutomationRevisionRead[] = [];
   for (const item of revisionItemsInStory(reads)) {
-    if (item.readOnly || item.revisionKind === 'structural') continue;
-    const type = REVISION_TYPES[item.revisionKind as keyof typeof REVISION_TYPES];
+    if (item.readOnly) continue;
+    const rowChange = item.structuralChanges?.length === 1 ? item.structuralChanges[0] : undefined;
+    const type =
+      item.revisionKind === 'structural'
+        ? rowChange === 'rowInsert'
+          ? 'Insert'
+          : rowChange === 'rowDelete'
+            ? 'Delete'
+            : undefined
+        : REVISION_TYPES[item.revisionKind as keyof typeof REVISION_TYPES];
     if (type === undefined) continue;
     found.push(
       Object.freeze({

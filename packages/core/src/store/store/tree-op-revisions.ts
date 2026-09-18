@@ -1,5 +1,10 @@
+import { retainedNestedRowSites } from './revision-table-preserve-nested.ts';
+import { unboundTableHistories } from './revision-table-unbound-history.ts';
+import { implicitTableRowProperties } from './revision-table-implicit-height.ts';
+import { ordinaryMoveRanges, planOrdinaryMoves } from './revision-move-ranges.ts';
 import {
   applyCellMerge,
+  restoredCellRows,
   rebuildRevisionTable,
   compactRevisionGrid,
 } from './revision-table-rebuild.ts';
@@ -13,15 +18,11 @@ import {
   tableMergeDependencies,
   revisionAttribute,
 } from './revision-table-plan.ts';
-// Accept and reject over the canonical tree.
-//
 // A revision is identified by the triple `(id, author, date)` WITHIN a part, never by id alone.
 // `@w:id` is `ST_DecimalNumber` on `CT_Markup` with no uniqueness constraint and no author
 // scoping, so two authors' revisions may legally share an id in one part, and one logical
 // revision deliberately spans many elements sharing an id. Addressing by id would merge the
 // first case and could not express the second.
-//
-// Two rules here are load-bearing and easy to get wrong:
 //
 //   - CONTAINMENT governs nesting. Resolving an outer wrapper settles whether its content
 //     exists; an inner revision survives exactly when the content does. Because removal takes
@@ -80,7 +81,9 @@ export function isPotentialRevisionElement(node: OoxmlNode): boolean {
       CELL_REVISION_NAMES.has(node.localName) ||
       PROPERTY_CHANGE_NAMES.has(node.localName) ||
       node.localName === 'ins' ||
-      node.localName === 'del')
+      node.localName === 'del' ||
+      node.kind === 'moveFromRangeStart' ||
+      node.kind === 'moveToRangeStart')
   );
 }
 
@@ -297,7 +300,18 @@ function collectRevisionSitesIn(
     for (const child of node.children) visit(child, node, parent, inner);
   };
   const root = scopeRootId === undefined ? part.root : findNode(part, scopeRootId);
-  if (root !== null) visit(root, null, null, 0);
+  if (root !== null) {
+    visit(root, null, null, 0);
+    for (const range of ordinaryMoveRanges(root))
+      sites.push({
+        node: range.start,
+        parent: range.parent,
+        refused: !range.supported,
+        paragraphMark: false,
+        propertyChange: false,
+        nesting: 0,
+      });
+  }
   return sites;
 }
 
@@ -445,6 +459,22 @@ export function revisionStructuralReach(
     matched
   );
   const reach = new Map<string, boolean>();
+  if (action === 'reject') {
+    for (const row of implicitTableRowProperties(part, matched).values()) reach.set(row, false);
+    for (const row of restoredCellRows(part, matched)) reach.set(row, false);
+  }
+  const moves = planOrdinaryMoves(
+    options?.scopeRootId ? scopedRevisionRoot(part, options.scopeRootId)! : part.root,
+    collectRevisionSitesIn(part, options?.scopeRootId),
+    new Set(matched.map((site) => site.node.id)),
+    action
+  );
+  for (const id of moves.markers) reach.set(id, false);
+  for (const id of moves.remove) reach.set(id, true);
+  for (const id of moves.relocate.keys()) {
+    const parent = parentNodeOf(part, id);
+    if (parent) reach.set(parent.id, false);
+  }
   for (const id of tableRevisionNeighbours(part, matched, action).keys()) reach.set(id, false);
   const removed = new Set(tableRevisionRemovals(part, matched, action).keys());
   for (const id of removed) reach.set(id, true);
@@ -533,6 +563,7 @@ function withDeletedTextRestored(node: OoxmlNode): OoxmlNode {
 interface RebuildPlan {
   /** Wrapper node id → what to do with it. */
   readonly actions: ReadonlyMap<string, Resolution>;
+  readonly relocate: ReadonlyMap<string, readonly OoxmlNode[]>;
   /** Nodes to drop outright: resolved paragraph marks and spent move-range markers. */
   readonly dropMarks: ReadonlySet<string>;
   /** Property-change wrappers, node id → restore the recorded properties into the parent. */
@@ -583,6 +614,12 @@ function rebuildChildren(children: readonly OoxmlNode[], plan: RebuildPlan): Oox
   /** Content of paragraphs whose mark was resolved away, waiting for the paragraph after. */
 
   for (const child of children) {
+    const relocated = plan.relocate.get(child.id);
+    if (relocated) {
+      const removeStructures = new Set(plan.removeStructures);
+      for (const node of relocated) removeStructures.delete(node.id);
+      out.push(...rebuildChildren(relocated, { ...plan, removeStructures }));
+    }
     if (child.kind !== 'textValue' && plan.removeStructures.has(child.id)) continue;
     if (child.kind !== 'textValue' && plan.dropMarks.has(child.id)) continue;
     if (child.kind !== 'textValue' && plan.restoreProperties.has(child.id)) continue;
@@ -697,28 +734,9 @@ function rebuildNode(node: OoxmlNode, plan: RebuildPlan): OoxmlNode[] {
   if (restoring !== undefined && restoring.kind !== 'textValue') {
     const recorded = recordedProperties(restoring);
     if (recorded !== null) {
-      // `CT_PPrChange` records a `CT_PPrBase`, which BY CONSTRUCTION cannot contain `w:rPr` or
-      // `w:sectPr` — `CT_PPr` is `CT_PPrBase`, then `w:rPr`, then `w:sectPr`, then the change
-      // wrapper. Replacing the container wholesale therefore deletes both. Losing `w:sectPr`
-      // deletes a SECTION BREAK: page size, margins and per-section header/footer references
-      // go with it, and every following paragraph reflows into the previous section.
-      //
-      // `CT_RPrChange` is nearly the opposite case: `CT_RPrOriginal` genuinely is the whole
-      // `w:rPr` content minus the change wrapper, so wholesale replacement is right — EXCEPT
-      // on a paragraph MARK, whose `w:pPr/w:rPr` also holds `EG_ParaRPrTrackChanges`. Those
-      // are somebody's pending decision about the paragraph BREAK, and it may have been taken
-      // after this format change was proposed. Restoring the container from the record alone
-      // deleted them, so rejecting a formatting suggestion silently answered an unrelated one.
-      //
-      // The LIVE ones win and the recorded copies are dropped. Both halves are load-bearing:
-      // `CT_ParaRPrOriginal` admits `w:ins`, so a Word-written record legitimately carries one,
-      // and keeping both emits two `w:ins` in a container whose schema allows one — a `w:pPr`
-      // Word reports as unreadable. A run's own `w:rPr` holds no such children either way.
-      //
-      // THE PRESERVED CHILDREN GO THROUGH THE PLAN. They are live sites, not copies: THIS
-      // resolution may also be removing one of them, and lifting them out verbatim made
-      // Reject All report success over a paragraph-mark revision it had just been asked to
-      // reject — the reviewer saw an empty pane and a tracked change still in the file.
+      // Property snapshots exclude independently tracked paragraph/section marks.
+      // Preserve their live versions, ignoring historical copies, and run them
+      // through this plan so bulk resolution still resolves selected marks.
       const preserved = rebuildChildren(
         node.children.filter((child) => preservedRevisionProperty(restoring.localName, child)),
         plan
@@ -774,14 +792,7 @@ export function resolveRevisionOperation(
   });
 }
 
-/**
- * Resolve every site carrying `address` (or every revision in the part, when `address` is
- * absent) in one transaction.
- *
- * Refuses without touching the tree when the revision is absent, or when ANY matched site is a
- * kind this pass does not resolve. A shared revision address is atomic: resolving only its
- * supported sites would falsely report that the whole decision had been applied.
- */
+/** Resolve the selected canonical sites atomically; refuse unsupported sites without mutation. */
 export function resolveRevisions(
   part: OoxmlPart,
   action: RevisionOpAction,
@@ -798,14 +809,23 @@ export function resolveRevisions(
     return { ok: false, reason: 'invalid-property-value' };
   }
   const sites = collectRevisionSitesIn(part, options?.scopeRootId);
-  const matched = matchingRevisionSites(
+  const unboundHistories = unboundTableHistories(part, sites);
+  const retainedRows = retainedNestedRowSites(part, sites, action);
+  let matched = matchingRevisionSites(
     sites,
     address,
     options?.localName,
     options?.siteNodeIds === undefined ? undefined : new Set(options.siteNodeIds)
   );
   if (matched.length === 0) return { ok: false, reason: 'unknown-revision' };
-  const selected = new Set(matched.map((site) => site.node.id));
+  const movePlan = planOrdinaryMoves(
+    scopeRoot,
+    sites,
+    new Set(matched.map((site) => site.node.id)),
+    action
+  );
+  const selected = movePlan.selected;
+  matched = sites.filter((site) => selected.has(site.node.id));
   const mergeIds = new Set(
     sites.filter((site) => site.node.localName === 'cellMerge').map((site) => site.node.id)
   );
@@ -830,10 +850,15 @@ export function resolveRevisions(
 
   const orphanDestinations = orphanMoveDestinationSites(scopeRoot, sites);
   const actions = new Map<string, Resolution>();
-  const dropMarks = new Set<string>();
+  const dropMarks = new Set(movePlan.markers);
+  if (action === 'reject')
+    for (const id of implicitTableRowProperties(part, matched).keys()) dropMarks.add(id);
   const restoreProperties = new Set<string>();
   const mergeForward = new Set<string>();
-  const removeStructures = new Set(tableRevisionRemovals(part, matched, action).keys());
+  const removeStructures = new Set([
+    ...tableRevisionRemovals(part, matched, action).keys(),
+    ...movePlan.remove,
+  ]);
   const mergeCells = new Map<string, OoxmlElement>();
   const tables = new Set<string>();
   for (const site of matched) {
@@ -856,10 +881,16 @@ export function resolveRevisions(
   }
 
   const addWrapper = (node: OoxmlElement): void => {
-    actions.set(node.id, orphanDestinations.has(node.id) ? 'unwrap' : resolutionOf(node, action));
+    actions.set(
+      node.id,
+      movePlan.wrapperActions.get(node.id) ??
+        (orphanDestinations.has(node.id) ? 'unwrap' : resolutionOf(node, action))
+    );
   };
 
   for (const site of matched) {
+    if (retainedRows.has(site.node.id)) continue;
+    if (site.node.kind === 'moveFromRangeStart' || site.node.kind === 'moveToRangeStart') continue;
     if (tableRevisionTarget(part, site)) {
       dropMarks.add(site.node.id);
       if (site.node.localName === 'cellMerge' && site.parent) {
@@ -886,9 +917,7 @@ export function resolveRevisions(
       continue;
     }
     if (site.propertyChange) {
-      // Accepting keeps the current properties and drops the record; rejecting puts the
-      // recorded properties back.
-      if (action === 'accept') dropMarks.add(site.node.id);
+      if (action === 'accept' || unboundHistories.has(site.node.id)) dropMarks.add(site.node.id);
       else restoreProperties.add(site.node.id);
       continue;
     }
@@ -916,24 +945,25 @@ export function resolveRevisions(
     addWrapper(site.node);
   }
 
-  // A move resolves as a pair. Pull in every wrapper sharing a `@w:name` with a matched half,
-  // so accepting the `moveTo` alone — which duplicates the content — is unreachable.
   const movesMatched = matched.filter(
     (site) => site.node.kind === 'revisionMoveFrom' || site.node.kind === 'revisionMoveTo'
   );
   if (movesMatched.length > 0) {
     for (const [, range] of namedMoveRanges(scopeRoot)) {
-      if (!range.wrappers.some((wrapper) => actions.has(wrapper.id))) continue;
+      if (
+        range.wrappers.some((wrapper) => movePlan.wrapperActions.has(wrapper.id)) ||
+        !range.wrappers.some((wrapper) => actions.has(wrapper.id))
+      )
+        continue;
       for (const wrapper of range.wrappers) addWrapper(wrapper);
-      // The range markers describe a move that no longer exists once it is resolved. Leaving
-      // them behind would keep an empty named bookmark pair in the file, which Word removes
-      // and which would pair with nothing on the next read.
+      // Legacy paired wrappers consume their range metadata together.
       for (const marker of range.markers) dropMarks.add(marker.id);
     }
   }
 
   const plan: RebuildPlan = {
     actions,
+    relocate: movePlan.relocate,
     dropMarks,
     restoreProperties,
     mergeForward,
