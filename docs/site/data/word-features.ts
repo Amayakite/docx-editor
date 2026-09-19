@@ -241,7 +241,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Space before, space after, and line spacing (single, multiple, exactly, at least) all reach pagination. A 1.5-spaced or double-spaced document breaks pages where Word breaks them. The paragraph mark size counts in the last line metrics, like Word. Contextual spacing drops the gap between neighbours of the same style, and the Paragraph dialog sets it. Automatic spacing (w:beforeAutospacing, w:afterAutospacing) uses 14pt in body paragraphs and 0pt in list items and table cells.',
+      'Space before, space after, and line spacing (single, multiple, exactly, at least) all reach pagination. A 1.5-spaced or double-spaced document breaks pages where Word breaks them. The paragraph mark size counts in the last line metrics, like Word. Contextual spacing drops the gap between neighbours of the same style in body text and table cells, including implicit default styles. Line-unit paragraph margins use 12pt units or the section grid pitch. Numbering-level paragraph properties participate in layout. The Paragraph dialog sets contextual spacing. Automatic spacing (w:beforeAutospacing, w:afterAutospacing) uses 14pt in body paragraphs and at list boundaries. Adjacent items in the same list suppress automatic spacing, including nested levels. Lists suppress automatic leading space at section start. Table cells suppress automatic spacing.',
   },
   {
     id: 'paragraphs.pagination',
@@ -330,7 +330,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'The toolbar toggle creates the numbering definition on first use, so a document that never carried a list can start one. It also applies the List Paragraph style, the way Word does, which is what closes the space between consecutive items. Turning the list off leaves the paragraph in List Paragraph, and indented, as Word does; pressing Enter on an empty item leaves the list and returns to the margin. Tab and the indent buttons change the level, and the marker changes with it.',
+      'The toolbar toggle creates the numbering definition on first use, so a document that never carried a list can start one. It also applies the List Paragraph style, the way Word does, which is what closes the space between consecutive items. Turning the list off leaves the paragraph in List Paragraph, and indented, as Word does; pressing Enter on an empty item leaves the list and returns to the margin. Enter within a list item continues a single blank-paragraph separator established by preceding items at the same level, including tracked breaks. Tab and the indent buttons change the level, and the marker changes with it.',
   },
   {
     id: 'lists.numbered',

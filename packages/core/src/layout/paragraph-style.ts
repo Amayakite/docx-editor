@@ -84,17 +84,20 @@ export interface ParagraphSpacing {
 export const AUTO_PARAGRAPH_SPACING_PT = 14;
 
 /**
- * Where a paragraph sits, for the two contexts in which Word's auto spacing resolves to 0
+ * Where a paragraph sits, for the contexts in which Word's auto spacing resolves to 0
  * instead of {@link AUTO_PARAGRAPH_SPACING_PT}.
  *
- * Both come from the HTML model the attribute emulates: a `<li>` and a `<td>` collapse the
- * paragraph margin, a bare `<p>` does not. A caller that says nothing gets the body answer.
+ * This resolves the interior list-item or table-cell value. Body layout restores each
+ * outer list margin in `resolveListAutoSpacing`, where neighboring blocks are available.
+ * A caller that says nothing gets the body answer.
  */
 export interface ParagraphAutoSpacingContext {
   /** The paragraph participates in numbering (`w:numPr`), i.e. it is a list item. */
   readonly inList?: boolean;
   /** The paragraph lives in a table cell. */
   readonly inTableCell?: boolean;
+  /** Section grid pitch in points; no grid uses Word's fixed 12pt line unit. */
+  readonly lineUnitPt?: number;
 }
 
 /**
@@ -283,6 +286,8 @@ export function paragraphSpacing(
 ): ParagraphSpacing {
   let before = 0;
   let after = 0;
+  let beforeLines: number | null = null;
+  let afterLines: number | null = null;
   let beforeAuto = false;
   let afterAuto = false;
   for (const property of props) {
@@ -295,6 +300,10 @@ export function paragraphSpacing(
     const authoredAfter = property.attributes?.after;
     if (authoredBefore !== undefined) before = spacingPoints(authoredBefore);
     if (authoredAfter !== undefined) after = spacingPoints(authoredAfter);
+    if (property.attributes?.beforeLines !== undefined)
+      beforeLines = integer(property.attributes.beforeLines, true);
+    if (property.attributes?.afterLines !== undefined)
+      afterLines = integer(property.attributes.afterLines, true);
     // The autospacing flags merge per attribute too, and independently of the measurement
     // beside them: a style may turn auto spacing OFF while leaving the `@before` it inherited
     // in place, and that paragraph must then use the measurement, not 0.
@@ -303,6 +312,18 @@ export function paragraphSpacing(
     if (authoredBeforeAuto !== undefined) beforeAuto = isOn(authoredBeforeAuto);
     if (authoredAfterAuto !== undefined) afterAuto = isOn(authoredAfterAuto);
   }
+  // Word uses a fixed 12pt line unit for paragraph margins without a document grid,
+  // independently of the font size and the paragraph's line-spacing rule.
+  if (beforeLines !== null)
+    before = clampNonNegative(
+      (beforeLines * (context?.lineUnitPt ?? 12)) / 100,
+      MAX_PARAGRAPH_SPACING_PT
+    );
+  if (afterLines !== null)
+    after = clampNonNegative(
+      (afterLines * (context?.lineUnitPt ?? 12)) / 100,
+      MAX_PARAGRAPH_SPACING_PT
+    );
   if (beforeAuto || afterAuto) {
     const auto = context?.inList || context?.inTableCell ? 0 : AUTO_PARAGRAPH_SPACING_PT;
     if (beforeAuto) before = auto;
