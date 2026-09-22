@@ -2819,15 +2819,17 @@ export interface TextFormFieldDialogSession {
 // @public
 export interface TextMeasurer {
     caretAdvances?(text: string, style: ResolvedRunStyle): readonly number[] | undefined;
+    hasResolvedFont?(style: ResolvedRunStyle): boolean;
     inkBounds?(text: string, style: ResolvedRunStyle): {
         left: number;
         right: number;
     } | undefined;
-    lineMetrics(style: ResolvedRunStyle): {
+    lineMetrics(style: ResolvedRunStyle, text?: string): {
         baseline: number;
         height: number;
     };
     measure(text: string, style: ResolvedRunStyle): number;
+    strikeoutMetrics?(style: ResolvedRunStyle): StrikeoutStrokePt | undefined;
 }
 
 // @public (undocumented)

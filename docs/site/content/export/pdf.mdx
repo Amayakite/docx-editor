@@ -1,0 +1,44 @@
+---
+title: DOCX to PDF
+description: Convert DOCX documents to PDF on Node.js with searchable text and native comments.
+category: Export formats
+---
+
+`@docx-editor.dev/docx-to-pdf` converts DOCX documents to PDF using Core's pagination, font resolution, and positioned glyphs. It runs on Node.js. Browser applications send documents to a server for conversion.
+
+The package is private and is not available from the public npm registry. It is distributed under the EigenPal Pro Evaluation License. Production use requires a commercial agreement.
+
+## Convert a document
+
+```ts
+import { readFile, writeFile } from 'node:fs/promises';
+import { exportPdf } from '@docx-editor.dev/docx-to-pdf';
+
+const source = await readFile('document.docx');
+const result = await exportPdf(source, {
+  displayMode: 'proposed',
+  comments: true,
+});
+
+await writeFile('document.pdf', result.bytes);
+```
+
+## Configure conversion
+
+By default, export includes proposed revisions and preserves comments as native PDF annotations. Set `comments: false` to omit annotations. Set `displayMode` to `'original'` or `'all-markup'` to change how revisions appear. Conversion preserves the source DOCX.
+
+The default `fidelityPolicy: 'strict'` rejects unsupported or approximate output. Use `'best-effort'` to receive available output with `result.diagnostics`.
+
+Core's `fontPolicy` controls font substitution. Inspect `result.fontResolution` for the fonts used in the PDF.
+
+## Supported content
+
+The exporter supports searchable multilingual text, tables, images, notes, textboxes, structured equations, links, and comments. Charts, rotated table-cell text, and advanced image effects produce diagnostics.
+
+For supported fonts, resource limits, and error handling, see the [package documentation](https://github.com/eigenpal/docx-editor/tree/main/packages/docx-to-pdf).
+
+## Try the demo
+
+Run `bun run dev:pdf` from the repository root and open <http://127.0.0.1:5180>. Edit the sample or select **Open DOCX**, then select **Generate PDF**. The preview appears beside the editor. Use **Download PDF** to save the result.
+
+After editing the document, select **Regenerate PDF** to update the preview. The demo runs conversions on request and does not retain uploaded documents or generated PDFs.
