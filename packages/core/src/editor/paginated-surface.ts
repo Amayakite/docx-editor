@@ -95,6 +95,7 @@ import {
   type TreeModelChange,
 } from '@docx-editor.dev/core/store';
 import { resolveSelectedDrawingRecord } from './docx-editor-images.ts';
+import { createHiddenMarkEditing, type RevisionView } from './hidden-mark-joins.ts';
 import { drawingSelectionPosition } from './surface-drawing-selection.ts';
 import { syncActiveFieldShading } from './surface-field-shading.ts';
 import {
@@ -509,7 +510,7 @@ export function mountPaginatedSurface(
           : null;
       return {
         layout: currentLayout,
-        selection,
+        selection: hiddenMarks.shownSelection(selection),
         measurer,
         ...(armedAtCaret()
           ? {
@@ -927,6 +928,11 @@ export function mountPaginatedSurface(
   const revisionAuthorVisibility =
     runtimeOptions.revisionAuthorVisibility ??
     createRevisionAuthorVisibility(options.hiddenRevisionAuthors);
+  const hiddenMarks = createHiddenMarkEditing({
+    layout: () => currentLayout,
+    part: () => session.partFor(storyScope()) ?? session.part(),
+    view: revisionView,
+  });
   const revisionFilter = (): RevisionAuthorFilter | undefined =>
     reviewView.filter(revisionAuthorVisibility.filterForSession(session));
   const paragraphMarkVisible = (paragraphId: string): boolean => {
@@ -1105,12 +1111,13 @@ export function mountPaginatedSurface(
     storyScope,
     paragraphOrder,
     layout: () => currentLayout,
-    selection: () => selection,
+    // Formatting reads the paragraph where the caret SHOWS; see `hidden-mark-joins.ts`.
+    selection: () => hiddenMarks.shownSelection(selection),
     displayMode: () => revisionDisplayMode(),
     authorFilter: revisionFilter,
     paragraphMarkVisible,
     commit: (run, nextSelection, options) => commit(run, nextSelection, options),
-    orderedRange: () => orderedRange(),
+    orderedRange: () => hiddenMarks.shownRange(orderedRange()),
     selectionMark: () => selectionMark(),
     textOf: (paragraphId) => textOf(paragraphId),
     selectedCells: () => cellSelection?.cellIds,
@@ -1123,12 +1130,12 @@ export function mountPaginatedSurface(
     session: gatedSession,
     storyScope,
     layout: () => currentLayout,
-    selection: () => selection,
+    selection: () => hiddenMarks.shownSelection(selection),
     displayMode: () => revisionDisplayMode(),
     authorFilter: revisionFilter,
     paragraphMarkVisible,
     commit: (run, nextSelection, commitOptions) => commit(run, nextSelection, commitOptions),
-    orderedRange: () => orderedRange(),
+    orderedRange: () => hiddenMarks.shownRange(orderedRange()),
     selectionMark: () => selectionMark(),
     textOf: (paragraphId) => textOf(paragraphId),
     paragraphOrder,
@@ -2664,7 +2671,7 @@ export function mountPaginatedSurface(
 
   const caretView = createCaretViewFollower({
     storyScopeOpen: () => Boolean(hfScope?.getActive() || noteOps?.activeNoteScope()),
-    selection: () => selection,
+    selection: () => hiddenMarks.shownSelection(selection),
     layout: () => currentLayout,
     measurer: () => measurer,
     preferredPageIndex: () => selectionSync.selectionPageIndex(),
@@ -3007,19 +3014,17 @@ export function mountPaginatedSurface(
     return { anchor: move(current.anchor), head: move(current.head) };
   }
 
-  /**
-   * Whether two paragraphs are siblings in the same container, so a join is even expressible.
-   *
-   * `paragraphOrder()` is flat document order: the paragraph before the one after a table is
-   * inside the table's last cell, and the paragraph before the first cell's is outside it.
-   * Neither pair can be joined, and the store says so — but only after the op is built and
-   * the whole transaction refused.
-   */
-  function joinableSiblings(firstId: string, secondId: string): boolean {
-    const part = session.partFor(storyScope()) ?? session.part();
-    const firstParent = parentNodeOf(part, firstId);
-    const secondParent = parentNodeOf(part, secondId);
-    return firstParent !== null && secondParent !== null && firstParent.id === secondParent.id;
+  /** The view layout removes hidden-mark paragraphs in; see `hidden-mark-joins.ts`. */
+  function revisionView(): RevisionView {
+    return { displayMode: revisionDisplayMode(), authorFilter: revisionFilter() };
+  }
+  /** Backspace/Delete from a caret in a removed paragraph remove that paragraph first. */
+  function removeCaretParagraph(direction: 'backward' | 'forward'): boolean {
+    const edit = hiddenMarks.removedCaretEdit(selection.head, direction);
+    if (edit === null) return false;
+    const after = () => collapsedAt(edit.caret);
+    commit(() => applyOps(edit.ops, selectionMark(), caretMark(edit.caret)), after);
+    return true;
   }
 
   function caretMark(position: { paragraphId: string; offset: number }): {
@@ -4296,6 +4301,7 @@ export function mountPaginatedSurface(
     flushPendingInputAndLayout,
     trackedAuthorOrNone,
     atParagraphEnd: (paragraphId, offset) => nextStyle.atParagraphEnd(paragraphId, offset),
+    revisionView,
   });
 
   // Clipboard glue over the payload builder and the paste router. Also above the surface
@@ -4494,10 +4500,11 @@ export function mountPaginatedSurface(
         );
         return;
       }
+      if (removeCaretParagraph('backward')) return;
       // Word keeps the typing format across Backspace: bold armed at a caret survives
       // deleting the character before it, re-anchored where the caret lands.
       const armed = armedAtCaret() ?? undefined;
-      const position = selection.head;
+      const position = hiddenMarks.shown(selection.head);
       if (position.offset === 0) {
         // Backspace at the start of a paragraph pulls it into the previous one. Refusing
         // here made the key look broken: a caret at the paragraph start is where a user
@@ -4539,18 +4546,15 @@ export function mountPaginatedSurface(
         // the surface, where a host that surfaces refusals reported an error for an ordinary
         // Backspace. Word moves the caret into the last cell instead; doing nothing is the
         // half of that this lane can honestly promise.
-        if (!joinableSiblings(previous, position.paragraphId)) {
+        const joins = hiddenMarks.joinOps(previous, position.paragraphId);
+        if (!joins) {
           setSelection(collapsedAt({ paragraphId: previous, offset: textOf(previous).length }));
           return;
         }
         const joinAt = textOf(previous).length;
         commit(
           () =>
-            applyOps(
-              [{ op: 'joinParagraphs', firstId: previous, secondId: position.paragraphId }],
-              selectionMark(),
-              caretMark({ paragraphId: previous, offset: joinAt })
-            ),
+            applyOps(joins, selectionMark(), caretMark({ paragraphId: previous, offset: joinAt })),
           () => collapsedAt({ paragraphId: previous, offset: joinAt }),
           { rearmPending: armed }
         );
@@ -4733,7 +4737,7 @@ export function mountPaginatedSurface(
       }
       let moved = navigateInActiveScope(
         currentLayout,
-        selection.head,
+        hiddenMarks.shown(selection.head),
         command,
         desiredX,
         hfScope?.getActive() ?? null,
@@ -4800,7 +4804,8 @@ export function mountPaginatedSurface(
       ) {
         noteOps.setActiveNotePageIndex(moved.pageIndex);
       }
-      const target = { anchor: extend ? selection.anchor : moved.position, head: moved.position };
+      const anchor = extend ? hiddenMarks.shown(selection.anchor) : moved.position;
+      const target = { anchor, head: moved.position };
       // A prompt is one unit for the caret, as in Word: arrowing into it selects the whole
       // prompt rather than parking the caret inside text the first keystroke replaces, which
       // left the buffered keystrokes after it aimed past the end of the shortened paragraph.
@@ -4873,11 +4878,11 @@ export function mountPaginatedSurface(
 
     deleteForward() {
       if (textFormInteraction?.selectForDeletion('forward')) return;
-      if (surface.deleteSelection()) return;
+      if (surface.deleteSelection() || removeCaretParagraph('forward')) return;
       // Delete keeps the typing format like Backspace does — the caret does not move, so
       // the armed format re-anchors in place.
       const armed = armedAtCaret() ?? undefined;
-      const position = selection.head;
+      const position = hiddenMarks.shown(selection.head);
       const text = textOf(position.paragraphId);
       if (position.offset < text.length) {
         // Delete at a chip's leading edge takes the WHOLE node — the forward mirror of
@@ -4936,7 +4941,9 @@ export function mountPaginatedSurface(
       commit(
         () =>
           applyOps(
-            [{ op: 'joinParagraphs', firstId: position.paragraphId, secondId: next }],
+            hiddenMarks.forwardJoinOps(position.paragraphId, next) ?? [
+              { op: 'joinParagraphs', firstId: position.paragraphId, secondId: next },
+            ],
             selectionMark()
           ),
         () => collapsedAt(position),
@@ -6104,7 +6111,7 @@ export function mountPaginatedSurface(
         return currentLayout;
       },
       measurer: () => measurer,
-      selection: () => selection,
+      selection: () => hiddenMarks.shownSelection(selection),
       // `none`: a press lands where the reader LOOKS, and moving the paper under a double
       // click sent its second press elsewhere — a blank footer band never opened.
       setSelection: (next) => setSelection(next, false, 'none'),

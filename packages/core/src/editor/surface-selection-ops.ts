@@ -6,6 +6,7 @@
 // selection and part, so every function is a plain input-to-output computation.
 
 import type { TreeDocxSessionView } from '@docx-editor.dev/core/binding';
+import { hiddenMarkRemovedIds, type RevisionView } from './hidden-mark-joins.ts';
 import { mergedPredecessorsOf } from '../layout/line-segments.ts';
 import {
   parentNodeOf,
@@ -398,7 +399,8 @@ export function planRangeDeletion(
   part: OoxmlPart,
   from: SemanticPosition,
   to: SemanticPosition,
-  order?: readonly string[]
+  order?: readonly string[],
+  view: RevisionView = { displayMode: layout.displayMode ?? 'all-markup', authorFilter: undefined }
 ): RangeDeletionPlan {
   const textOf = (paragraphId: string): string => paragraphTextFromLayout(layout, paragraphId);
   if (from.paragraphId === to.paragraphId) {
@@ -507,6 +509,14 @@ export function planRangeDeletion(
    * while `joinParagraphs` still requires true child-index adjacency, which vetoed the whole
    * atomic delete (`not-adjacent-siblings`) and left every table standing.
    */
+  // Paragraphs a hidden mark removed from the flow in this view, per host: invisible, so a
+  // join may absorb them. Layout's own answer, asked only where something lies between.
+  const removedUnder = new Map<string, ReadonlySet<string>>();
+  const hiddenUnder = (host: OoxmlElement): ReadonlySet<string> => {
+    let ids = removedUnder.get(host.id);
+    if (!ids) removedUnder.set(host.id, (ids = hiddenMarkRemovedIds(host.children, view)));
+    return ids;
+  };
   const eventualParagraphsUnder = (host: OoxmlElement): string[] => {
     const ids: string[] = [];
     const visit = (nodes: readonly OoxmlNode[]): void => {
@@ -531,13 +541,19 @@ export function planRangeDeletion(
     return ids;
   };
 
-  const consecutiveSiblings = (before: string, after: string): boolean => {
+  // The paragraphs a join from `before` to `after` must absorb on the way — none when they
+  // are consecutive — or null when something that is not a removed paragraph lies between.
+  const bridgeBetween = (before: string, after: string): string[] | null => {
     const host = eventualHost(before);
-    if (!host || eventualHost(after) !== host) return false;
+    if (!host || eventualHost(after) !== host) return null;
     const sequence = eventualParagraphsUnder(host);
     const start = sequence.indexOf(before);
     const end = sequence.indexOf(after);
-    return start !== -1 && end === start + 1;
+    if (start === -1 || end <= start) return null;
+    const between = sequence.slice(start + 1, end);
+    if (between.length === 0) return between;
+    const removed = hiddenUnder(host);
+    return between.every((id) => removed.has(id)) ? between : null;
   };
 
   let groupHead = survivorId;
@@ -545,8 +561,11 @@ export function planRangeDeletion(
   for (let index = survivorIndex + 1; index <= lastIndex; index += 1) {
     const id = effectiveOrder[index]!;
     if (tableOfParagraph.has(id)) continue; // going with its table; nothing to join
-    if (consecutiveSiblings(previous, id)) {
-      ops.push({ op: 'joinParagraphs', firstId: groupHead, secondId: id });
+    const bridge = bridgeBetween(previous, id);
+    if (bridge) {
+      for (const joined of [...bridge, id]) {
+        ops.push({ op: 'joinParagraphs', firstId: groupHead, secondId: joined });
+      }
     } else {
       // Something this plan does not remove sits between: start a new join group on ITS far
       // side rather than joining across it.
