@@ -3,7 +3,7 @@ import type { CellAnchorScope } from './cell-anchor-layout.ts';
 import { markPendingLineWrapAdvances, growPendingLineDrawingExtent } from './pending-line.ts';
 import { shouldIncludeParagraphMarkHeight } from './paragraph-mark-metrics.ts';
 import { paragraphSpanMetadata } from './paragraph-span-metadata.ts';
-import { fitsWithSpaceShrink } from './paragraph-space-shrink.ts';
+import { fitsWithSpaceShrink, opensWithHangingSpace } from './paragraph-space-shrink.ts';
 import { piecesOfParagraphForDisplay } from './field-projection-walk.ts';
 import { bidiSourceBoundaries } from './bidi-piece-coalescing.ts';
 export {
@@ -1434,6 +1434,8 @@ export function breakParagraph(
       const fitWidth = opticalFit ? width : (colonNaturalWidths.get(piece) ?? width);
       if (
         !hangs &&
+        // A space after a word that borrowed inter-word space hangs on its line.
+        !(lineEndWhitespace && flow?.justifySpaceShrink) &&
         line.width + fitWidth > lineAvailable() + OVERFLOW_TOLERANCE_PT &&
         !(
           flow?.justifySpaceShrink &&
@@ -1454,7 +1456,10 @@ export function breakParagraph(
             line.width,
             lineAvailable(),
             opensWord ? line.spans.length : wordStartSpan,
-            opensWord ? line.width : wordStartWidth
+            opensWord ? line.width : wordStartWidth,
+            boundary < piece.text.length
+              ? !layoutOwned && piece.text[boundary] === ' '
+              : opensWithHangingSpace(pieces[pieceIndex + 1])
           )
         ) &&
         (line.spans.length > 0 || line.drawings.length > 0)

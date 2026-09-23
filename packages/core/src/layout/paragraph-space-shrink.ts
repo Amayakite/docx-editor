@@ -7,6 +7,7 @@ import { measureDisplayText } from './run-style.ts';
 import { styleForFontSlot } from './script-itemization.ts';
 import type { ResolvedRunStyle } from './run-style.ts';
 import type { StyleSpanRecord, TextMeasurer } from './semantic-records.ts';
+import type { FieldAwarePiece } from './field-pieces.ts';
 
 function capacity(span: StyleSpanRecord, measurer: TextMeasurer): number {
   if (
@@ -34,6 +35,11 @@ function capacity(span: StyleSpanRecord, measurer: TextMeasurer): number {
  * ends where the word began, so `wordStart`/`wordStartWidth` describe that
  * alternative. Their defaults are the values the caller already holds when the
  * overflowing candidate opens the word, so that path measures exactly as before.
+ *
+ * `spaceFollows` says the next character is a space, in this run or at the start of
+ * the next one. A candidate without its own space is then a complete word: a space in
+ * its own run, or one split off by East Asian break rules, hangs at the line end
+ * exactly as a space inside the candidate would.
  */
 export function fitsWithSpaceShrink(
   spans: readonly StyleSpanRecord[],
@@ -43,14 +49,20 @@ export function fitsWithSpaceShrink(
   lineWidth: number,
   available: number,
   wordStart: number = spans.length,
-  wordStartWidth: number = lineWidth
+  wordStartWidth: number = lineWidth,
+  spaceFollows = false
 ): boolean {
+  const ownSpace = /^[^\s]+ $/u.test(candidate);
   if (
-    !/^[^\s]+ $/u.test(candidate) ||
+    !(ownSpace || (spaceFollows && /^[^\s]+$/u.test(candidate))) ||
     spans.some((s) => s.text.includes('\t') || s.wrapAdvanceBefore || s.equation)
   )
     return false;
-  const visible = measureDisplayText(candidate.slice(0, -1), style, measurer);
+  const visible = measureDisplayText(
+    ownSpace ? candidate.slice(0, -1) : candidate,
+    style,
+    measurer
+  );
   const needed = lineWidth + visible - available;
   const budget = spans.reduce((sum, span) => sum + capacity(span, measurer), 0);
   if (needed <= 0 || needed > budget + 0.001) return false;
@@ -67,15 +79,33 @@ export function fitsWithSpaceShrink(
   return expansion > 1.5 || 1 + (expansion - 1) / 1.7 >= compression;
 }
 
-/** Compress eligible spaces evenly, respecting every face's minimum space advance. */
+/**
+ * True when `piece` opens with a U+0020 that can hang at a line end. Only a plain text
+ * piece splits into candidates; a projected field result, positional tab, or reserved
+ * measure is laid out whole, so its leading space would open the next line instead.
+ */
+export function opensWithHangingSpace(piece: FieldAwarePiece | undefined): boolean {
+  return (
+    piece !== undefined &&
+    piece.text[0] === ' ' &&
+    !piece.projected &&
+    !piece.positionalTab &&
+    piece.measureText === undefined &&
+    piece.end - piece.start === piece.text.length
+  );
+}
+
+/**
+ * Compress eligible spaces evenly, respecting every face's minimum space advance.
+ * Only spans before `slotEnd` are slots: the span there ends the content and its space hangs.
+ */
 export function shrinkJustifiedSpans(
   spans: readonly StyleSpanRecord[],
   needed: number,
-  measurer: TextMeasurer
+  measurer: TextMeasurer,
+  slotEnd: number = spans.length - 1
 ): readonly StyleSpanRecord[] {
-  const capacities = spans.map((span, index) =>
-    index < spans.length - 1 ? capacity(span, measurer) : 0
-  );
+  const capacities = spans.map((span, index) => (index < slotEnd ? capacity(span, measurer) : 0));
   if (needed <= 0 || needed > capacities.reduce((a, b) => a + b, 0) + 0.001) return spans;
   const amounts = capacities.map(() => 0);
   let remaining = needed;

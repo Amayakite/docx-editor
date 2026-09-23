@@ -144,3 +144,118 @@ test('modes 16 and 17 justify exactly as mode 15 does', () => {
       modern
     );
 });
+
+// Producers often keep the space after a word in its own run (tracked edits, character
+// spacing), and East Asian break rules split every word from its space. The word before
+// that space is complete, so it borrows inter-word space like a same-run word.
+test('a word whose space sits in the next run borrows inter-word space', () => {
+  for (const runs of [
+    ['aa bb cc', ' dd'],
+    ['aa ', 'bb', ' ', 'cc', ' ', 'dd'],
+  ]) {
+    const result = layoutSemanticDocument(seamSource(runs), 1, {
+      measurer,
+      compatibilityMode: 15,
+    });
+    expect(content(result)).toEqual(['aa bb cc', 'dd']);
+    const line = linesOf(result)[0]!;
+    expect(line.spans.at(-1)!.box.x + line.spans.at(-1)!.box.width).toBeLessThanOrEqual(66.001);
+    expect(line.spans.some((s) => (s.style.shaping?.wordSpacingPt ?? 0) < 0)).toBe(true);
+    expect(
+      content(layoutSemanticDocument(seamSource(runs), 1, { measurer, compatibilityMode: 14 }))
+    ).toEqual(['aa bb', 'cc dd']);
+  }
+});
+
+test('an East Asian language paragraph compresses Latin spaces the same way', () => {
+  const body = loadBody(
+    `<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:lang w:eastAsia="zh-CN"/></w:rPr>` +
+      `<w:t>aa bb cc dd</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="2320" w:h="6000"/>` +
+      `<w:pgMar w:left="500" w:right="500" w:top="500" w:bottom="500"/></w:sectPr>`
+  );
+  expect(content(layoutSemanticDocument(body, 1, { measurer, compatibilityMode: 15 }))).toEqual([
+    'aa bb cc',
+    'dd',
+  ]);
+});
+
+test('a following run that continues the word, or ends the paragraph, gets no shrink', () => {
+  for (const [runs, expected] of [
+    [
+      ['aa bb cc', 'x dd'],
+      ['aa bb', 'ccx dd'],
+    ],
+    [
+      ['aa bb cc', ' '],
+      ['aa bb', 'cc'],
+    ],
+  ] as const) {
+    expect(
+      content(layoutSemanticDocument(seamSource(runs), 1, { measurer, compatibilityMode: 15 }))
+    ).toEqual(expected);
+  }
+});
+
+// A double space split across runs: the word keeps its own space and the next run's
+// space hangs after it. Both spaces hang, so the line still compresses to the measure.
+test('a word with its own space and a hanging space run still compresses to the measure', () => {
+  const result = layoutSemanticDocument(seamSource(['aa bb cc ', ' dd']), 1, {
+    measurer,
+    compatibilityMode: 15,
+  });
+  expect(content(result)).toEqual(['aa bb cc', 'dd']);
+  const spans = linesOf(result)[0]!.spans;
+  const cc = spans.find((s) => s.text.startsWith('cc'))!;
+  expect(cc.box.x).toBeCloseTo(46, 6);
+  expect(cc.box.x + measurer.measure('cc', cc.style)).toBeLessThanOrEqual(66.001);
+  expect(cc.style.shaping?.wordSpacingPt ?? 0).toBe(0);
+});
+
+test('a hanging space run after a word with its own space does not shorten the stretch', () => {
+  for (const compatibilityMode of [14, 15]) {
+    const endOf = (runs: readonly string[]) => {
+      const spans = linesOf(
+        layoutSemanticDocument(seamSource(runs, -1, 72), 1, { measurer, compatibilityMode })
+      )[0]!.spans;
+      const cc = spans.find((s) => s.text.startsWith('cc'))!;
+      return cc.box.x + measurer.measure('cc', cc.style);
+    };
+    expect(endOf(['aa bb cc ', ' dd'])).toBeCloseTo(endOf(['aa bb cc dd']), 6);
+    expect(endOf(['aa bb cc ', '  dd'])).toBeCloseTo(endOf(['aa bb cc dd']), 6);
+  }
+});
+
+test('a no-break space before a hanging space stays content in the stretch', () => {
+  const lines = linesOf(
+    layoutSemanticDocument(seamSource(['aa bb cc ', ' dd'], -1, 80), 1, {
+      measurer,
+      compatibilityMode: 15,
+    })
+  );
+  expect(lines.length).toBe(2);
+  const spans = lines[0]!.spans;
+  const cc = spans.find((s) => s.text.startsWith('cc'))!;
+  expect(cc.box.x + measurer.measure('cc ', cc.style) - spans[0]!.box.x).toBeCloseTo(80, 6);
+});
+
+// A field result is measured whole, so its leading space cannot hang at the line end.
+// A word before it must not borrow space on the promise that the space will hang.
+test('a space that opens a field result does not let the word before it compress', () => {
+  const result = ' 1';
+  for (const field of [
+    `<w:fldSimple w:instr="PAGE"><w:r><w:t xml:space="preserve">${result}</w:t></w:r></w:fldSimple>`,
+    `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF bm1 \\h </w:instrText></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t xml:space="preserve">${result}</w:t></w:r>` +
+      `<w:r><w:fldChar w:fldCharType="end"/></w:r>`,
+  ]) {
+    const body = loadBody(
+      `<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>aa bb cc</w:t></w:r>${field}` +
+        `<w:r><w:t xml:space="preserve"> ee</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="2320" w:h="6000"/>` +
+        `<w:pgMar w:left="500" w:right="500" w:top="500" w:bottom="500"/></w:sectPr>`
+    );
+    const lines = linesOf(layoutSemanticDocument(body, 1, { measurer, compatibilityMode: 15 }));
+    const texts = lines.map((l) => l.spans.map((s) => s.text).join(''));
+    expect(texts[0]!.trimEnd()).toBe('aa bb');
+    for (const text of texts.slice(1)) expect(text.startsWith(' ')).toBe(false);
+  }
+});
