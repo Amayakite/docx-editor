@@ -5,9 +5,17 @@ category: 'React'
 order: 32
 ---
 
-`<DocxEditor>` arranges public components into a packaged editor. Use the same components to build custom chrome.
+`<DocxEditor>` combines public components into a packaged editor. Arrange these components yourself, or connect your own controls to the same commands and state.
 
-The packaged toolbar uses the hooks and primitives on this page. Your controls can use the same command and state APIs.
+## Arrange editor components
+
+Choose toolbar controls, placement, labels, spacing, and styles. Add optional document controls, then copy the selected components and CSS.
+
+The demo shows a subset of the available components and options. These layouts demonstrate composition; they are not packaged toolbar presets.
+
+Use your own React components and TSX for toolbars, menus, and panels. Connect them with [React hooks](/docs/2.x/react/hooks), combine them with packaged parts, and supply your own CSS.
+
+<ReactCompositionDemo />
 
 ## Composition requirements
 
@@ -108,7 +116,7 @@ For composed chrome, call `useChromeTranslate()` inside the locale provider and 
 
 ## Customization options
 
-Use the first option that meets your requirements:
+Choose the amount of customization you need:
 
 1. Override CSS custom properties from the `--doc-*` palette.
 2. Use the `icon` prop to replace a glyph.
@@ -144,9 +152,9 @@ A compound child replaces the slot with the same name. Other default slots remai
 
 ## Custom toolbar
 
-Set `preset={false}` to remove the registry's default arrangement. The JSX order then controls the visual order. Packaged parts still get enabled state, active state, and commands from the engine.
+Set `preset={false}` to include only your chosen parts. Their JSX order sets the toolbar order. Each part gets enabled state, active state, and commands from the engine.
 
-This example builds a custom toolbar from packaged parts:
+This example combines selected packaged parts with custom icons and styles:
 
 ```tsx
 <DocxEditor.Toolbar preset={false} className="my-toolbar">
@@ -234,7 +242,7 @@ function HighlightAction() {
 }
 ```
 
-Share one hook across each surface that exposes the action. This practice keeps enabled-state rules consistent. The chrome registry applies the same rule to packaged toolbar and menu controls.
+Reuse one hook wherever you expose the action. This keeps its enabled-state rules consistent. Packaged toolbar and menu controls share these rules through the chrome registry.
 
 ## Custom context menu
 
@@ -280,6 +288,8 @@ You can combine packaged rows, custom rows, slots, and submenus. This example al
 The compound appends unrecognized children after its rows. It keeps the packaged panel element, roles, keyboard behavior, and placement.
 
 ## Custom menu bar
+
+Pass `exporters` to the menu to connect export and print handlers. For setup, see [Print documents](/docs/2.x/guides/print).
 
 The default menu bar derives from `CHROME_MENUS`. Registry updates therefore appear in the default bar. You can add a host menu or replace the **Help** menu:
 
@@ -381,6 +391,8 @@ The parts are `Url`, `Fields`, `Edit`, `Apply`, `Cancel`, `Copy`, `Unlink`, and 
 
 `DocxEditor.HorizontalRuler` and `DocxEditor.VerticalRuler` read page setup and zoom from the snapshot. They update after section and zoom changes. A margin drag shows a preview and commits one transaction on release. The transaction creates one undo entry. The handles do not operate in view mode.
 
+Use Tab to focus a vertical ruler margin handle. Arrow Up increases the margin; Arrow Down decreases it. Hold Shift to change one twip. Home and End select the permitted limits. Each change creates one undo entry.
+
 ```tsx
 <DocxEditor.Root document={bytes}>
   <DocxEditor.HorizontalRuler />
@@ -405,7 +417,9 @@ const [open, setOpen] = useState(false);
 
 The dialog and `usePageSetup()` use the same engine command.
 
-Page Setup, Paragraph Options, and legacy text Field Options expose replaceable parts and draft contexts. Import `definePopup` from `@docx-editor.dev/react`. Set `popups.pageSetup` to `definePopup(MyPopup)` on the editor or `Root`. Use `popups.export` and `DocxEditor.ExportDialog` to customize File menu export feedback. Use `popups.print` and `DocxEditor.PrintDialog` to customize File menu print feedback. For examples, see [Customize popups](/docs/2.x/guides/customize-dialogs).
+Page setup, paragraph options, and legacy text field options expose replaceable parts and draft contexts. Import `definePopup` from `@docx-editor.dev/react` and pass your component through the editor's `popups` map.
+
+Use `popups.export` for export feedback and `popups.print` for print feedback. The packaged dialogs are `DocxEditor.ExportDialog` and `DocxEditor.PrintDialog`. For examples, see [Customize popups](/docs/2.x/guides/customize-dialogs).
 
 ## Content-control panel
 

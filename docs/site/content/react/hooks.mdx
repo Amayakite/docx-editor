@@ -5,9 +5,17 @@ category: 'React'
 order: 33
 ---
 
-Call these hooks inside `<DocxEditor.Root>`. You can also call them inside `<DocxEditor>`, which renders that root. The hooks read the editor from React context.
+Call these hooks from components inside `<DocxEditor.Root>`. The packaged `<DocxEditor>` provides this root for its children.
 
-The packaged toolbar, menu, and navigation pane use the same hooks.
+The hooks connect your React components to the same commands and state that packaged controls use.
+
+## Connect controls to editor state
+
+Build buttons with your own React components and TSX. Use `useEditorCommand` for actions and `useEditorState` for selected state.
+
+Choose visible buttons, icons, and CSS in this example. Hiding a button does not change command availability. The engine supplies enabled state and refusal reasons.
+
+<ReactHooksDemo />
 
 ## `useEditorCommand`
 
@@ -40,7 +48,7 @@ function BoldButton() {
 | `isEnabled`      | `boolean`        | Reports whether the command can run.             |
 | `disabledReason` | `string \| null` | Explains why the command cannot run.             |
 
-Use `isEnabled` as the enabled-state source. Use `disabledReason` when you explain a disabled control.
+Use `isEnabled` to enable each control. Show `disabledReason` when the command cannot run.
 
 Pass an `EditorCommand` when no chrome slot matches your action:
 
@@ -64,9 +72,9 @@ function PageIndicator() {
   );
 }
 
-function SaveButton() {
-  const dirty = useEditorState((s) => s.canUndo ?? false);
-  return <button disabled={!dirty}>Save</button>;
+function HistoryStatus() {
+  const canUndo = useEditorState((s) => s.canUndo);
+  return <span>{canUndo ? 'Undo is available' : 'No undo history'}</span>;
 }
 ```
 
@@ -78,6 +86,8 @@ const formatting = useEditorState(
   (a, b) => a?.bold === b?.bold && a?.italic === b?.italic
 );
 ```
+
+`canUndo` reports undo availability. It does not report unsaved changes. Track save completion separately in your application.
 
 Select only the state that your component needs. A page indicator does not need to render after a bold-state change.
 

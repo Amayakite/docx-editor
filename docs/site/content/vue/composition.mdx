@@ -1,11 +1,21 @@
 ---
 title: 'Composition'
-description: 'Build a Vue DOCX editor from root, viewport, content, chrome, and review primitives.'
+description: 'Build a Vue DOCX editor with packaged parts, selected toolbar controls, and your own components.'
 category: 'Vue'
 order: 37
 ---
 
-`<DocxEditor>` supplies one arrangement of public parts. Use the parts when you need a different interface.
+`<DocxEditor>` combines public components into a packaged editor. Arrange these components yourself, or connect your own controls to the same commands and state.
+
+## Arrange editor components
+
+Choose toolbar controls, placement, labels, spacing, and styles. Add optional document controls, then copy the selected Vue components and CSS.
+
+The demo shows a subset of the available components and options. These layouts demonstrate composition; they are not packaged toolbar presets.
+
+Use your own Vue components for toolbars, menus, and panels. Connect them with [Vue composables](/docs/2.x/vue/composables), combine them with packaged parts, and supply your own CSS.
+
+<VueCompositionDemo />
 
 ## Composition requirements
 
@@ -132,7 +142,7 @@ For composed chrome, call `useChromeTranslate()` inside the locale provider and 
 
 ## Customization options
 
-Use the first option that meets your requirements:
+Choose the amount of customization you need:
 
 1. Set a class or a `--doc-*` color token.
 2. Replace a part's `icon` prop.
@@ -166,7 +176,9 @@ A named part replaces the matching part in the preset. The `hidden` prop removes
 
 ## Custom toolbar
 
-Set `:preset="false"` to use template order. Packaged parts still read command state and disabled reasons from the editor.
+Set `:preset="false"` to include only your chosen parts. Their template order sets the toolbar order. Each part reads command state and disabled reasons from the editor.
+
+This example combines selected packaged parts:
 
 ```vue
 <DocxEditorToolbar :preset="false" class-name="my-toolbar">
@@ -259,6 +271,8 @@ You can keep packaged rows, remove rows, add registry slots, and add host rows.
 `DocxEditorContextMenu.Slot` gets its label, icon, state, and command from the registry.
 
 ## Custom menu bar
+
+Pass `exporters` to the menu to connect export and print handlers. For setup, see [Print documents](/docs/2.x/guides/print).
 
 `DocxEditorMenu` derives its default menus from `CHROME_MENUS`. Override only the menus that your product changes.
 
@@ -355,6 +369,8 @@ Its parts are `Url`, `Fields`, `Edit`, `Apply`, `Cancel`, `Copy`, `Unlink`, and 
 
 The rulers read page setup and zoom from the editor. A drag creates one undo entry when you release the handle.
 
+Use Tab to focus a vertical ruler margin handle. Arrow Up increases the margin; Arrow Down decreases it. Hold Shift to change one twip. Home and End select the permitted limits. Each change creates one undo entry.
+
 ```vue
 <DocxEditorRoot :document="bytes">
   <DocxEditorHorizontalRuler />
@@ -387,7 +403,9 @@ const pageSetupOpen = ref(false);
 
 Use `usePageSetup()` to build a different form.
 
-Page Setup, Paragraph Options, and legacy text Field Options expose replaceable parts and draft contexts. Import `definePopup` from `@docx-editor.dev/vue`. Set `popups.pageSetup` to `definePopup(MyPopup)` on the editor or `Root`. Use `popups.export` and `DocxEditor.ExportDialog` to customize File menu export feedback. Use `popups.print` and `DocxEditor.PrintDialog` to customize File menu print feedback. For examples, see [Customize popups](/docs/2.x/guides/customize-dialogs).
+Page setup, paragraph options, and legacy text field options expose replaceable parts and draft contexts. Import `definePopup` from `@docx-editor.dev/vue` and pass your component through the editor's `popups` map.
+
+Use `popups.export` for export feedback and `popups.print` for print feedback. The packaged dialogs are `DocxEditor.ExportDialog` and `DocxEditor.PrintDialog`. For examples, see [Customize popups](/docs/2.x/guides/customize-dialogs).
 
 ## Content-control panel
 
