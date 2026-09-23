@@ -1,4 +1,5 @@
 import { growRunBorderLineMetrics, textBandHeightWithBorders } from './run-border-strokes.ts';
+import type { CellAnchorScope } from './cell-anchor-layout.ts';
 import { markPendingLineWrapAdvances, growPendingLineDrawingExtent } from './pending-line.ts';
 import { shouldIncludeParagraphMarkHeight } from './paragraph-mark-metrics.ts';
 import { paragraphSpanMetadata } from './paragraph-span-metadata.ts';
@@ -199,6 +200,8 @@ export interface ParagraphFlowOptions {
   readonly pageExclusionZones?: readonly ExclusionZone[];
   /** When breaking inside a table cell, the cell content box for anchored frame resolution. */
   readonly anchorCellBox?: LayoutBox | null;
+  /** With {@link anchorCellBox}: what decides the cell's anchors' `layoutInCell`. */
+  readonly cellAnchorScope?: CellAnchorScope;
   /**
    * Instruction-only TOC paragraphs and ending field chrome can carry no measurable text.
    * When set, an otherwise empty break returns no lines. A paragraph mark after a TOC
@@ -536,8 +539,13 @@ export function breakParagraph(
         }
         return true;
       }) ?? [];
+    // A story whose text ignores its anchors' wrap (a header before mode 15) carves nothing.
+    const anchorsWrap = flow?.cellAnchorScope?.anchorsWrapText !== false;
     const synthesizedWrap =
-      flow?.inlineDrawingLayout && flow.anchorCellBox != null && anchorLineTopByModelStart.size > 0
+      anchorsWrap &&
+      flow?.inlineDrawingLayout &&
+      flow.anchorCellBox != null &&
+      anchorLineTopByModelStart.size > 0
         ? synthesizeParagraphWrapExclusionZones({
             paragraph,
             paragraphId,
@@ -547,6 +555,7 @@ export function breakParagraph(
             paragraphStartY: flow.paragraphStartY ?? 0,
             anchorLineTopByModelStart,
             anchorCellBox: flow.anchorCellBox,
+            cellAnchorScope: flow.cellAnchorScope,
             displayMode: anchorDisplayMode,
             ...(flow.revisionAuthorFilter
               ? { revisionAuthorFilter: flow.revisionAuthorFilter }
@@ -554,7 +563,7 @@ export function breakParagraph(
           })
         : Object.freeze([]);
     const synthesized =
-      flow?.inlineDrawingLayout && anchorLineTopByModelStart.size > 0
+      anchorsWrap && flow?.inlineDrawingLayout && anchorLineTopByModelStart.size > 0
         ? synthesizeParagraphTopAndBottomZones({
             paragraph,
             paragraphId,
@@ -563,6 +572,8 @@ export function breakParagraph(
             contentRight,
             paragraphStartY: flow.anchorParagraphStartY ?? flow.paragraphStartY ?? 0,
             anchorLineTopByModelStart,
+            anchorCellBox: flow.anchorCellBox,
+            cellAnchorScope: flow.cellAnchorScope,
             displayMode: anchorDisplayMode,
             ...(flow.revisionAuthorFilter
               ? { revisionAuthorFilter: flow.revisionAuthorFilter }

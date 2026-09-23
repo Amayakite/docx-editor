@@ -1,7 +1,6 @@
 // Anchored drawing exclusion zones and paint-layer ordering (typed-drawings-and-images task 9).
 //
 // Wrap exclusions feed paragraph line breaking; behind/inFront wrapNone produce none.
-// Overlap displacement under allowOverlap=false is deterministic before paint order.
 
 import type { DrawingProjection, ImageWrapTarget } from '../store/package/drawing-projection.ts';
 import {
@@ -13,7 +12,9 @@ import {
   type AnchoredDrawingRecord,
   type InlineDrawingLayoutContext,
 } from './drawing-layout.ts';
+import { anchoredOutOfCell, type CellAnchorScope } from './cell-anchor-layout.ts';
 import { drawingGeometryFromProjection } from './drawing-geometry.ts';
+import { compareDrawingCollisionOrder } from './drawing-overlap.ts';
 import { topAndBottomBandAnchorY } from './top-and-bottom-clearance.ts';
 import {
   DEFAULT_REVISION_DISPLAY_MODE,
@@ -35,9 +36,6 @@ import type { LayoutBox } from './semantic-records.ts';
 
 /** Paint layer relative to body text — not the OOXML wrap element. */
 export type DrawingPaintLayer = 'behind' | 'inFront';
-
-/** Maximum vertical displacement attempts before next-page deferral. */
-export const MAX_OVERLAP_DISPLACEMENT_ATTEMPTS = 256;
 
 /** Maximum page-to-page deferrals before publishing with {@link AnchoredDrawingLayoutFallback}. */
 export const MAX_ANCHOR_PAGE_DEFERRALS = 8;
@@ -138,7 +136,7 @@ export function paintLayerOf(drawing: AnchoredDrawingRecord): DrawingPaintLayer 
   return drawing.behindDocument ? 'behind' : 'inFront';
 }
 
-function wrapProducesExclusion(wrap: ImageWrapTarget): boolean {
+export function wrapProducesExclusion(wrap: ImageWrapTarget): boolean {
   return wrap !== 'inline' && wrap !== 'behind' && wrap !== 'inFront';
 }
 
@@ -268,17 +266,6 @@ export function exclusionZoneFromAnchoredDrawing(options: {
   });
 }
 
-/** Canonical collision/displacement order — source traversal only, not paint metadata. */
-export function compareDrawingCollisionOrder(
-  left: AnchoredDrawingRecord,
-  right: AnchoredDrawingRecord
-): number {
-  const leftOrder = left.sourceOrder ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = right.sourceOrder ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-  return left.drawingNodeId.localeCompare(right.drawingNodeId);
-}
-
 export function compareDrawingPaintOrder(
   left: AnchoredDrawingRecord,
   right: AnchoredDrawingRecord
@@ -296,114 +283,6 @@ export function sortDrawingsForPaint(
   drawings: readonly AnchoredDrawingRecord[]
 ): readonly AnchoredDrawingRecord[] {
   return Object.freeze([...drawings].sort(compareDrawingPaintOrder));
-}
-
-function paintBoundsOverlap(a: LayoutBox, b: LayoutBox): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-}
-
-export function shiftAnchoredDrawingY(
-  drawing: AnchoredDrawingRecord,
-  dy: number
-): AnchoredDrawingRecord {
-  if (Math.abs(dy) <= 0.000_1) return drawing;
-  const geometry = drawing.geometry;
-  return Object.freeze({
-    ...drawing,
-    y: drawing.y + dy,
-    paintBounds: Object.freeze({ ...drawing.paintBounds, y: drawing.paintBounds.y + dy }),
-    hitBounds: Object.freeze({ ...drawing.hitBounds, y: drawing.hitBounds.y + dy }),
-    geometry: Object.freeze({
-      ...geometry,
-      contentBounds: Object.freeze({
-        ...geometry.contentBounds,
-        y: geometry.contentBounds.y + dy,
-      }),
-      paintBounds: Object.freeze({
-        ...geometry.paintBounds,
-        y: geometry.paintBounds.y + dy,
-      }),
-      hitBounds: Object.freeze({
-        ...geometry.hitBounds,
-        y: geometry.hitBounds.y + dy,
-      }),
-      transformedCorners: geometry.transformedCorners.map((point) =>
-        Object.freeze({ x: point.x, y: point.y + dy })
-      ),
-      ...(geometry.imageTransformCorners
-        ? {
-            imageTransformCorners: geometry.imageTransformCorners.map((point) =>
-              Object.freeze({ x: point.x, y: point.y + dy })
-            ),
-          }
-        : {}),
-      clipPolygon: geometry.clipPolygon
-        ? geometry.clipPolygon.map((point) => Object.freeze({ x: point.x, y: point.y + dy }))
-        : null,
-    }),
-  });
-}
-
-export interface OverlapDisplacementOptions {
-  readonly pageBottom: number;
-  readonly maxAttempts?: number;
-}
-
-export interface OverlapDisplacementResult {
-  readonly drawings: readonly AnchoredDrawingRecord[];
-  readonly deferred: readonly AnchoredDrawingRecord[];
-  readonly deferredNodeIds: readonly string[];
-}
-
-/** Deterministic overlap resolution: canonical source order, then stable node id. */
-export function resolveOverlapDisplacement(
-  drawings: readonly AnchoredDrawingRecord[],
-  options: OverlapDisplacementOptions
-): OverlapDisplacementResult {
-  const maxAttempts = options.maxAttempts ?? MAX_OVERLAP_DISPLACEMENT_ATTEMPTS;
-  const sorted = [...drawings].sort(compareDrawingCollisionOrder);
-  const placed: AnchoredDrawingRecord[] = [];
-  const deferred: AnchoredDrawingRecord[] = [];
-  const deferredNodeIds: string[] = [];
-
-  for (const drawing of sorted) {
-    if (drawing.allowOverlap) {
-      placed.push(drawing);
-      continue;
-    }
-    let candidate = drawing;
-    let attempts = 0;
-    while (attempts < maxAttempts) {
-      const overlaps = placed.some((existing) =>
-        paintBoundsOverlap(existing.paintBounds, candidate.paintBounds)
-      );
-      if (!overlaps) break;
-      const blocker = placed.find((existing) =>
-        paintBoundsOverlap(existing.paintBounds, candidate.paintBounds)
-      )!;
-      const step =
-        blocker.paintBounds.y + blocker.paintBounds.height - candidate.paintBounds.y + 0.001;
-      candidate = shiftAnchoredDrawingY(candidate, step);
-      attempts += 1;
-    }
-    const stillOverlaps = placed.some((existing) =>
-      paintBoundsOverlap(existing.paintBounds, candidate.paintBounds)
-    );
-    const pastPageBottom =
-      candidate.paintBounds.y + candidate.paintBounds.height > options.pageBottom + 0.001;
-    if (stillOverlaps || pastPageBottom) {
-      deferred.push(candidate);
-      deferredNodeIds.push(candidate.drawingNodeId);
-      continue;
-    }
-    placed.push(candidate);
-  }
-
-  return Object.freeze({
-    drawings: Object.freeze(placed),
-    deferred: Object.freeze(deferred),
-    deferredNodeIds: Object.freeze(deferredNodeIds),
-  });
 }
 
 export function mergeAvailableIntervalsAtY(
@@ -573,6 +452,8 @@ export function synthesizeParagraphWrapExclusionZones(options: {
   readonly anchorLineTopByModelStart: ReadonlyMap<number, number>;
   readonly sourceOrderOf?: (drawingNodeId: string) => number | undefined;
   readonly anchorCellBox?: LayoutBox | null;
+  /** With {@link anchorCellBox}: what decides the cell's anchors' `layoutInCell`. */
+  readonly cellAnchorScope?: CellAnchorScope;
   /** Which revisions this pass resolves away — see {@link publishAnchoredDrawingsForParagraph}. */
   readonly displayMode?: RevisionDisplayMode;
   readonly revisionAuthorFilter?: RevisionAuthorFilter;
@@ -588,11 +469,7 @@ export function synthesizeParagraphWrapExclusionZones(options: {
     // hole either: the original view must not wrap text around an insertion it hides.
     if (!revisionsVisible(atom.revisions, displayMode, options.revisionAuthorFilter)) continue;
     if (atom.projection.anchor?.behindDocument) continue;
-    // `w:layoutInCell="0"` positions the object against the page rather than the cell that
-    // encloses its anchor, so it is not part of that cell's flow and carves no hole in it.
-    // A Word control of two identical rows, one flag each, runs the cell's text straight
-    // through the object in the `0` row and wraps around it in the `1` row.
-    if (options.anchorCellBox != null && atom.projection.anchor?.layoutInCell === false) continue;
+    if (anchoredOutOfCell(atom.projection, options)) continue;
     if (!wrapProducesExclusion(atom.projection.wrap) || atom.projection.wrap === 'topAndBottom')
       continue;
     const modelStart = offsets.get(atom.atomId);
@@ -679,6 +556,9 @@ export function synthesizeParagraphTopAndBottomZones(options: {
   readonly anchorLineTopByModelStart: ReadonlyMap<number, number>;
   readonly sourceOrderOf?: (drawingNodeId: string) => number | undefined;
   readonly columnIndex?: number;
+  /** Set inside a table cell; with the scope, drops the anchors Word lays out off the cell. */
+  readonly anchorCellBox?: LayoutBox | null;
+  readonly cellAnchorScope?: CellAnchorScope;
   /** Which revisions this pass resolves away — see {@link publishAnchoredDrawingsForParagraph}. */
   readonly displayMode?: RevisionDisplayMode;
   readonly revisionAuthorFilter?: RevisionAuthorFilter;
@@ -693,6 +573,12 @@ export function synthesizeParagraphTopAndBottomZones(options: {
     if (!revisionsVisible(atom.revisions, displayMode, options.revisionAuthorFilter)) continue;
     if (atom.projection.anchor?.behindDocument) continue;
     if (atom.projection.wrap !== 'topAndBottom') continue;
+    // The table's rows move below this out-of-cell float instead of the cell text.
+    if (
+      options.cellAnchorScope?.rowsClearOutOfCellFloats &&
+      anchoredOutOfCell(atom.projection, options)
+    )
+      continue;
     const modelStart = offsets.get(atom.atomId);
     if (modelStart === undefined) continue;
     const lineTop = options.anchorLineTopByModelStart.get(modelStart);

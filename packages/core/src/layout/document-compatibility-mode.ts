@@ -54,3 +54,11 @@ export function compatibilityModeFromSettings(root: OoxmlElement | null): number
   }
   return result;
 }
+
+/**
+ * Whether a document lays out in Word 2013 or later mode (15+). An absent mode is legacy,
+ * never modern; see {@link compatibilityModeFromSettings}.
+ */
+export function isWord2013OrLaterMode(compatibilityMode: number | undefined): boolean {
+  return compatibilityMode !== undefined && compatibilityMode >= 15;
+}

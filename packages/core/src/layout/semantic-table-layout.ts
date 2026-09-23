@@ -115,6 +115,7 @@ import { cellContentInsets, type CellContentInsets } from './table-cell-geometry
 import { authoredRowMinimumFloorPt, type RowMinimumInsetMap } from './table-row-minimum-insets.ts';
 import { blockInlineRight } from './table-cell-text-direction.ts';
 import { finalizeTableRows, shiftBlocks } from './table-fragment-finalize.ts';
+import { cellAnchorFlow, cellAnchorScope } from './cell-anchor-layout.ts';
 export { finalizeTableRows } from './table-fragment-finalize.ts';
 import type { RowVMergeLayoutOptions, VMergeRowHeights } from './table-vmerge-heights.ts';
 
@@ -209,6 +210,9 @@ export interface TableFlowDeps {
    */
   readonly defaultTabStopPt?: number;
   readonly compatibilityMode?: number;
+  /** False in a header or footer before mode 15; see `CellAnchorScope.anchorsWrapText`. */
+  readonly anchorsWrapText?: boolean;
+  readonly outOfCellFloatParagraphs?: ReadonlySet<string>; // see table-out-of-cell-floats.ts
   /** Story boxes start their first table at traversal depth one. */
   readonly tableNestingOffset?: 1;
   /**
@@ -459,17 +463,17 @@ function placeCellParagraph(
     startOffset === 0
       ? directionalListFirstLineShift(listItem, indent, deps.measurer, tabStops, available, rtl)
       : 0;
-  const rawZones = deps.pageExclusionZones?.() ?? Object.freeze([]);
+  const anchorScope = cellAnchorScope(options?.inTableCell, deps, paragraphId);
+  const rawZones = (anchorScope.anchorsWrapText && deps.pageExclusionZones?.()) || [];
   const paragraphOrder = deps.paragraphOrderIndex?.(paragraphId) ?? Number.MAX_SAFE_INTEGER;
   const filtered = deps.paragraphOrderIndex
     ? filterExclusionZonesForParagraphOrder(rawZones, paragraphOrder, (id) =>
         deps.paragraphOrderIndex?.(id)
       )
     : rawZones;
-  const pageZones = localizeExclusionZones(filtered, originX, 0, {
-    left: 0,
-    right: indent.left + available + indent.right,
-  });
+  // The cell's own content box: tabs measure against it, and cell anchors resolve in it.
+  const cellBoxWidth = indent.left + available + indent.right;
+  const pageZones = localizeExclusionZones(filtered, originX, 0, { left: 0, right: cellBoxWidth });
   // Zone geometry alone does NOT identify the break: these zones stay in page-content Y
   // (only x is localized to the cell), so which band a line crosses depends on where the
   // paragraph starts. Two cells of the same text and width under the same float would
@@ -491,7 +495,7 @@ function placeCellParagraph(
       deps.drawingTokenForParagraph?.(paragraph) || deps.drawingLayoutToken || '',
       deps.inlineDrawingLayout !== undefined
     ),
-    projectionToken: `${deps.projectionTokenForParagraph?.(paragraph) ?? ''}|cellEndMark:${options?.cellEndMark === true}|from:${startOffset}`,
+    projectionToken: `${deps.projectionTokenForParagraph?.(paragraph) ?? ''}|cellEndMark:${options?.cellEndMark === true}|from:${startOffset}|rowsClear:${anchorScope.rowsClearOutOfCellFloats}`,
     ...(positionedExclusionToken ? { exclusionToken: positionedExclusionToken } : {}),
   });
   if (deps.cache) deps.onCellBreakKey?.(key);
@@ -514,8 +518,7 @@ function placeCellParagraph(
       firstLineOffset,
       ...(startOffset === 0 ? listMarkerFirstLineMetrics(listItem, deps.measurer) : {}),
       startOffset,
-      // A cell's own content box is the column a positional tab measures against.
-      marginExtent: { left: 0, right: indent.left + available + indent.right },
+      marginExtent: { left: 0, right: cellBoxWidth },
       ...(deps.projectLink ? { projectLink: deps.projectLink } : {}),
       ...(deps.projectFieldLink ? { projectFieldLink: deps.projectFieldLink } : {}),
       showFieldCodes: deps.showFieldCodes,
@@ -532,14 +535,9 @@ function placeCellParagraph(
       ...(deps.noteMarks ? { noteMarks: deps.noteMarks } : {}),
       ...(deps.inlineDrawingLayout ? { inlineDrawingLayout: deps.inlineDrawingLayout } : {}),
       contentLeft: 0,
-      contentRight: indent.left + available + indent.right,
+      contentRight: cellBoxWidth,
       paragraphStartY: top,
-      anchorCellBox: Object.freeze({
-        x: 0,
-        y: 0,
-        width: indent.left + available + indent.right,
-        height: Math.max(1, available),
-      }),
+      ...cellAnchorFlow(cellBoxWidth, available, anchorScope),
       ...(pageZones.length > 0 ? { pageExclusionZones: pageZones } : {}),
     },
   });
@@ -973,6 +971,7 @@ function placeCellParagraph(
           cellBox,
           cellContentBox: cellBox,
           pageClip: deps.pageContentClip(),
+          cellAnchorScope: anchorScope,
           measurer: deps.measurer,
           ...(deps.hostedStory
             ? { layoutTextboxStory: deps.hostedStory.layoutTextboxStoryFor }
@@ -1132,6 +1131,7 @@ function flowBlocksInBoxBounded(
       deps,
       previousSpaceAfter,
       {
+        inTableCell,
         lineStart: lineIndex,
         startOffset,
         applyWidowControl,
