@@ -1,4 +1,5 @@
-import { stableHash } from '../store/comparators/canonical.ts';
+import { fnv1a64Hex } from '../store/comparators/canonical.ts';
+import { framedTokenJoin } from './layout-cache.ts';
 import type { OoxmlPart } from '../store/package/ooxml-tree.ts';
 import { findNode } from '../store/package/ooxml-edit.ts';
 import { detectBodyTocs, tocFieldRange } from '../store/package/toc-detect.ts';
@@ -67,7 +68,13 @@ export function tocLinkStyleToken(ranges: TocLinkRanges): string {
   if (ranges.size === 0) return '';
   const held = tokens.get(ranges);
   if (held !== undefined) return held;
-  const token = stableHash([...ranges]);
+  // A layout-cache token, never persisted: hash a length-framed join rather than canonicalizing
+  // a copy of every range. Length framing stays injective whatever characters an id carries.
+  const parts: string[] = [];
+  for (const [paragraphId, list] of ranges) {
+    parts.push(paragraphId, list.map((range) => `${range.start},${range.end}`).join(';'));
+  }
+  const token = fnv1a64Hex(framedTokenJoin(parts));
   tokens.set(ranges, token);
   return token;
 }
