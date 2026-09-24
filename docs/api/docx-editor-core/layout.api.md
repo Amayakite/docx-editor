@@ -3028,6 +3028,7 @@ export interface ResolvedTableBorderEdgeSegment {
 // @public
 export interface ResolvedTabStops {
     readonly defaultIntervalPt: number;
+    readonly ignoreIndentAsNumberingTabStop?: true;
     readonly stops: readonly TabStop[];
 }
 
@@ -4161,6 +4162,7 @@ export interface StyleCascadeTable {
     readonly docDefaultsParagraphNode: OoxmlElement | undefined;
     // (undocumented)
     readonly docDefaultsRun: readonly OoxmlProperty[];
+    readonly ignoreIndentAsNumberingTabStop?: true;
     readonly preserveExactLineBaseline?: true;
     readonly strictTableStyleHierarchy?: boolean;
     // (undocumented)
@@ -4442,6 +4444,7 @@ export type TableRowHeightRule = 'auto' | 'atLeast' | 'exact';
 export interface TabStop {
     // (undocumented)
     readonly alignment: TabAlignment;
+    readonly implied?: true;
     readonly leader?: TabLeader;
     readonly numberingOnly?: true;
     readonly positionPt: number;
