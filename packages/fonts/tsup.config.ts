@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import { declarationCompilerOptions } from '../../scripts/declaration-options.mjs';
 
 export default defineConfig({
   // One entry per published subpath. Keep in step with `exports` in package.json.
@@ -8,7 +9,8 @@ export default defineConfig({
   },
   platform: 'browser',
   format: ['cjs', 'esm'],
-  dts: true,
+  // See scripts/declaration-options.mjs.
+  dts: { compilerOptions: declarationCompilerOptions(import.meta.url) },
   splitting: true,
   sourcemap: false,
   clean: true,

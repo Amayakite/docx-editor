@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Options } from 'tsup';
+import { declarationCompilerOptions } from '../../scripts/declaration-options.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -108,7 +109,8 @@ export default defineConfig([
       'collaboration/webrtc': 'src/collaboration/webrtc.ts',
       'collaboration/hocuspocus': 'src/collaboration/hocuspocus.ts',
     },
-    dts: true,
+    // See scripts/declaration-options.mjs.
+    dts: { compilerOptions: declarationCompilerOptions(import.meta.url) },
     // The one config in this array that may let tsup name the file. See
     // `writeMetafileAs`.
     metafile: true,
@@ -121,10 +123,10 @@ export default defineConfig([
       'vue/hocuspocus': 'src/vue/hocuspocus.ts',
     },
     dts: {
-      compilerOptions: {
+      compilerOptions: declarationCompilerOptions(import.meta.url, {
         jsx: 'preserve',
         jsxImportSource: 'vue',
-      },
+      }),
     },
     // Off, so tsup does not write `dist/metafile-${format}.json` over the build above.
     // The plugin writes `dist/metafile-vue-${format}.json` instead.

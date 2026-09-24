@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup';
+import { declarationCompilerOptions } from '../../scripts/declaration-options.mjs';
 
 // Two entries, one build. `index` is the server-safe one; `browser` is the one that reaches the
 // editor lane. See `src/index.ts` for why that split exists.
@@ -14,7 +15,8 @@ export default defineConfig({
   // makes the ROOT entry importable from all three rather than only from Node.
   platform: 'browser',
   format: ['cjs', 'esm'],
-  dts: { resolve: true },
+  // See scripts/declaration-options.mjs.
+  dts: { resolve: true, compilerOptions: declarationCompilerOptions(import.meta.url) },
   tsconfig: 'tsconfig.json',
   // Off on purpose. With splitting, "what is in the server bundle" becomes a question about a
   // graph of shared chunks; off, `scripts/pack-smoke.mjs` can answer it by reading one entry file.
