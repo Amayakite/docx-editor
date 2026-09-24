@@ -33,12 +33,20 @@ jobs:
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: node scripts/collaboration/post-release.mjs
 
-  updates:
+  verify:
     needs: source
-    if: needs.source.outputs.published == 'true'
-    uses: ./.github/workflows/recover-release.yml
+    # The ref check sits on this calling job, so a skip here skips every job that needs it.
+    # A reusable workflow whose inner job was skipped can still report the call as success.
+    if: needs.source.outputs.published == 'true' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/verify-release.yml
     with:
       source_run_id: ${{ format('{0}', github.event.workflow_run.id) }}
+      version: ${{ needs.source.outputs.version }}
+
+  downstream:
+    needs: [source, verify]
+    uses: ./.github/workflows/release-downstream.yml
+    with:
       version: ${{ needs.source.outputs.version }}
     secrets: inherit
     permissions:
@@ -49,7 +57,12 @@ jobs:
       statuses: read
 
   announcements:
-    needs: [source, updates]
+    name: Release comments and roadmap
+    # Only verification, not the site updates or the catalog: those can take an hour, and
+    # a failure there is reported on its own.
+    needs: [source, verify]
+    # Plain `needs` results, not reusable-workflow outputs: a rerun of the failed jobs keeps
+    # the results of the jobs that passed.
     if: needs.source.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -91,7 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.pal-token.outputs.token }}
           PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
-          PUBLISHED_PACKAGES: ${{ needs.updates.outputs.published_packages }}
+          VERSION: ${{ needs.source.outputs.version }}
           REPO: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
           ORG: eigenpal
@@ -103,7 +116,7 @@ jobs:
           # best-effort API call would otherwise abort this step — which, via
           # the implicit success() gate, would skip the landing-notify
           # dispatch below.
-          version=$(jq -r '.[0].version' <<<"$PUBLISHED_PACKAGES")
+          version="$VERSION"
           OWNER="${REPO%%/*}"
           NAME="${REPO#*/}"
           # The checkout includes the umbrella tag created by the Release workflow.
@@ -284,20 +297,48 @@ jobs:
           fi
           sync_version "v$version" 1
 
-  notify-failure:
-    needs: [source, updates, announcements]
-    if: failure()
+  report:
+    name: Report
+    needs: [source, verify, downstream, announcements]
+    if: always() && (needs.source.outputs.published == 'true' || failure())
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - name: Report a post-release failure
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/collaboration
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      # One message per release that lists every job with its result and a link.
+      - name: Post the result of every job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_URL: ${{ github.event.workflow_run.html_url }}
+          VERSION: ${{ needs.source.outputs.version }}
+          PUBLISHED: ${{ needs.source.outputs.published }}
+        run: node scripts/collaboration/post-release-report.mjs
+      # The report needs a checkout, the GitHub API, and Slack. If any of them fails, or the
+      # job runs out of time, still send an alert.
+      - name: Send a plain alert if the report failed
+        if: failure() || cancelled()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SOURCE_URL: ${{ github.event.workflow_run.html_url }}
-        if: env.SLACK_WEBHOOK_URL != ''
+          PUBLISHED: ${{ needs.source.outputs.published }}
         run: |
-          payload=$(jq -n --arg run "$RUN_URL" --arg source "$SOURCE_URL" \
-            '{text: ("Post-release verification or updates failed: " + $run + ". Original Release run: " + $source + ". Check both runs before retrying. Use Recover release for already-published packages; do not republish them.")}')
-          curl -sSf --connect-timeout 10 --max-time 30 -X POST -H 'Content-Type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL" >/dev/null
+          [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
+          note=""
+          if [ "$PUBLISHED" = true ]; then note=" The packages are already on npm; do not republish."; fi
+          jq -n --arg run "$RUN_URL" --arg source "$SOURCE_URL" --arg note "$note" \
+            '{text: ("Post-release: the step report could not be built or sent. Check the jobs in " + $run + ". Release run: " + $source + "." + $note)}' \
+            | curl -sSf --connect-timeout 10 --max-time 30 -X POST -H 'Content-Type: application/json' -d @- "$SLACK_WEBHOOK_URL" >/dev/null

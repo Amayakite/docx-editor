@@ -164,15 +164,39 @@ bun run release
 
 The [Post-release updates workflow](../.github/workflows/post-release.yml) starts when Release completes. It checks that the source run published packages and created the version tag. Release-PR updates and runs that published nothing skip these tasks.
 
-Release finishes without waiting for npm metadata propagation. The downstream workflow verifies the original tested artifacts, requests documentation and converter-site updates, captures and merges the collaboration baseline after CI passes, and comments on the shipped PRs and issues. A downstream failure has its own workflow status and alert; it does not change the completed Release run. Retried comments are deduplicated.
+Release finishes without waiting for npm metadata propagation. The post-release workflow calls [Verify release](../.github/workflows/verify-release.yml) and then [Release downstream updates](../.github/workflows/release-downstream.yml). Each step is its own job:
 
-The release-success Slack notification runs immediately after publication and tagging. Documentation notifications come from the website's own sync and deployment workflows. A release notification therefore confirms publication; check the downstream workflows to confirm that the documentation is ready.
+| Job | What it does |
+| --- | --- |
+| **Verify published packages** | Checks the published packages against the original tested artifacts. Every other step waits for it. |
+| **Site update (docx-editor.dev)** | Requests the documentation update and waits for that site's sync run to finish. |
+| **Site update (docx-to-markdown.com)** | Requests the Markdown site update and waits for its sync run. |
+| **Site update (docx-to-pdf.dev)** | Requests the PDF site update and waits for its sync run. |
+| **Capture collaboration catalog** | Opens the generated collaboration baseline PR. |
+| **Merge verified catalog** | Waits for the PR's checks, approves the tested commit, and merges it. |
+| **Release comments and roadmap** | Comments on the shipped PRs and issues and updates the roadmap board. |
 
-Automatic and manual downstream updates share a concurrency group that is separate from Release. Registry retries do not hold the release lock or delay another publication.
+A site job passes only when that site's own sync run passes. Each site deploys in a separate workflow that the site job does not follow. If a site's content looks out of date, check that site's deployment. To read the sync runs, the `eigenpal-release-pal` GitHub App needs the **Actions: Read-only** repository permission.
+
+Each request carries an ID in `client_payload.request` that starts with the version, and each site's sync workflow names its run `upstream-release <request>`. The site job uses that name to find its own run. If a site does not name its runs, the site job waits 2 minutes and then takes the first unnamed sync run created after the request. If the site cancels the run because a newer sync of the same version queued, the site job follows the newer run.
+
+A site job sends nothing when a newer version is already npm `latest`, and it passes as superseded, because the site follows the newer release. The same check applies when a newer version's sync cancels the run. So neither a rerun nor a late request moves a site back to an older version.
+
+`main` requires an approving review, and release-pal cannot approve the catalog PR that it opened. The merge job approves it with the workflow token. This needs the repository setting **Allow GitHub Actions to create and approve pull requests** under **Settings** > **Actions** > **General**. The release comments need only verification, so they do not wait for the site updates or the catalog, and a failure there does not hold them back. Retried comments are deduplicated.
+
+The **Report** job posts one Slack message that lists every job with its result and a link. A skipped job is listed as skipped, not as passed. A downstream failure does not change the completed Release run.
+
+The release-success Slack notification runs immediately after publication and tagging, so it confirms publication only. The post-release report confirms the site syncs and the catalog.
+
+The verification jobs of automatic and manual downstream updates share a concurrency group that is separate from Release. Registry retries do not hold the release lock or delay another publication. The site jobs run outside that group, so a long documentation sync does not hold back the next request. The npm `latest` check, not the order of the requests, keeps each site on the newest release.
 
 ## Recover post-release updates without publishing
 
-Use the [Recover release workflow](../.github/workflows/recover-release.yml) if npm publication succeeded but registry verification or downstream updates failed. Rerunning Release can skip these updates because Changesets reports that the packages are already published.
+If a post-release job failed after verification passed, fix the cause and rerun the failed jobs in that post-release run (`gh run rerun <run-id> --failed`). The rerun can also repeat other jobs in the same reusable workflow, such as site updates that passed. That is safe: a site that already has the version records no change, and a catalog that already records the version passes.
+
+A rerun of the failed jobs does not repeat a verification that passed, and the jobs that need it run again from its passed result. A site job that reruns after a newer release passes as superseded and sends nothing. To recover a catalog that a newer release left behind, run `collaboration-catalog.yml` with the missed `version` input. The Recover release workflow repeats verification, which fails when a newer version is already npm `latest`.
+
+If npm publication succeeded but registry verification failed, or if the post-release run cannot be rerun, use the [Recover release workflow](../.github/workflows/recover-release.yml). Rerunning Release can skip these updates because Changesets reports that the packages are already published.
 
 1. Open the original Release run. Confirm that **Release PR or Publish** succeeded, and copy the run ID from its URL.
 2. Run the recovery workflow from `main` with the published version and original run ID. For example, to recover 2.19.0:
@@ -184,10 +208,10 @@ Use the [Recover release workflow](../.github/workflows/recover-release.yml) if 
    ```
 
 3. Check the recovery run. It validates the source run and version tag, downloads the original `collaboration-candidate` artifact, checks its local hashes, and compares every published package's integrity with the tested tarball.
-4. Check the downstream workflows in `docx-editor.dev` and `docx-to-markdown.com`. A successful dispatch means the update was requested; each site has its own generation, validation, and deployment steps.
-5. Check the collaboration baseline PR. The catalog workflow waits for the full CI run and all PR checks, then merges the tested commit. If checks fail, the PR stays open. Fix the failure and rerun the catalog workflow to resume an existing PR.
+4. Check the site jobs. Each one passes only when its site's sync run passes, and links to that run.
+5. Check the collaboration baseline PR. The catalog workflow waits for the full CI run and all PR checks, then approves and merges the tested commit. If checks fail, the PR stays open. Fix the failure and rerun the catalog workflow to resume an existing PR.
 
-Recovery does not build or publish packages, create release tags, or replay release announcements. It only updates sites for the current npm `latest` version at verification time. Downstream updates are serialized separately from publication to keep their requests ordered. To capture a historical baseline, run `collaboration-catalog.yml` with its `version` input separately.
+Recovery does not build or publish packages, create release tags, or replay release announcements. It only updates sites for the current npm `latest` version at verification time. Verification is serialized separately from publication. To capture a historical baseline, run `collaboration-catalog.yml` with its `version` input separately.
 
 The candidate artifact is retained for 30 days on new Release runs. Earlier runs keep their original retention period. If the original artifact has expired, stop: a rebuilt tarball does not establish what the original release tested.
 
