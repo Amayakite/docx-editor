@@ -424,7 +424,7 @@ export const wordFeatures: WordFeature[] = [
     roundTrip: 'full',
     tier: 'community',
     notes:
-      'Explicit Word compatibility modes 11, 12, and 14 preserve content alignment for supported full-width AutoFit tables. The same settings apply in body, header, footer, text-box, and note stories. Fixed tables without a positive table width retain complete grids for a limited uniform cell width pattern. Each column must carry the same absolute preference, with grid widths both larger and smaller than that preference. Other preferences must match the grid. Missing preferences and merged cells keep normal width reconciliation.',
+      'Explicit Word compatibility modes 11, 12, and 14 preserve content alignment for supported full-width AutoFit tables. The same settings apply in body, header, footer, text-box, and note stories. Fixed tables without a positive table width preserve complete column grids when absolute cell width preferences disagree. AutoFit tables and incomplete grids retain cell width reconciliation.',
   },
   {
     id: 'tables.rtl',

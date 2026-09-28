@@ -2,4 +2,4 @@
 '@docx-editor.dev/core': patch
 ---
 
-Fix fixed-layout tables expanding under stale uniform cell widths while preserving other cell width preferences.
+Fix fixed-layout tables expanding beyond their complete column grids when no positive table width is specified.

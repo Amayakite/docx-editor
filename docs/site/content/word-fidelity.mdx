@@ -59,7 +59,7 @@ This supports auto-height frames in single-column sections with page, margin, or
 
 <FeatureMatrix category="tables" />
 
-When you report a table width difference, include its grid widths and cell width preferences. The table insertion and cell editing note defines the supported uniform preference pattern. The editor preserves these document properties when you save the file.
+When you report a table width difference, include its grid widths, cell width preferences, and layout type. Fixed tables without a positive table width preserve complete column grids. This layout behavior does not rewrite the document properties when you save.
 
 Explicit Word compatibility modes 11, 12, and 14 preserve content alignment for supported full-width AutoFit tables. This applies in body, header, footer, text-box, and note stories. The table must have explicit zero indentation, left alignment, zero cell spacing, and consistent outer cell margins. Its complete authored grid must equal the text-column width plus those margins. Other layouts keep their existing geometry, including nested tables and files without an explicit compatibility mode.
 
