@@ -217,6 +217,46 @@ const MIN_DERIVED_COLUMN_PT = 1;
 const WIDTH_EPSILON_PT = 0.001;
 
 /**
+ * Recognize uniform absolute preferences left over from equal-width columns. Every
+ * column must carry that preference, with both wider and narrower authored columns.
+ * Other rows may agree with the grid, but any other preference keeps normal reconciliation.
+ * Missing preferences and merged cells are deliberately outside this rule.
+ */
+function hasUniformStalePreferences(
+  seed: readonly (number | undefined)[],
+  claims: readonly CellWidthClaim[],
+  columnCount: number
+): boolean {
+  if (seed.length !== columnCount || seed.some((width) => width === undefined)) return false;
+  let uniform: number | undefined;
+  let wider = false;
+  let narrower = false;
+  for (const claim of claims) {
+    if (
+      claim.span !== 1 ||
+      seed[claim.start] === undefined ||
+      claim.preferred.type !== 'dxa' ||
+      !Number.isFinite(claim.preferred.value) ||
+      claim.preferred.value <= 0
+    )
+      return false;
+    const width = claim.preferred.value;
+    const difference = width - seed[claim.start]!;
+    if (Math.abs(difference) <= WIDTH_EPSILON_PT) continue;
+    if (uniform !== undefined && Math.abs(width - uniform) > WIDTH_EPSILON_PT) return false;
+    uniform = width;
+    wider ||= difference > 0;
+    narrower ||= difference < 0;
+  }
+  if (uniform === undefined || !wider || !narrower) return false;
+  const covered = new Uint8Array(columnCount);
+  for (const claim of claims) {
+    if (Math.abs(claim.preferred.value - uniform) <= WIDTH_EPSILON_PT) covered[claim.start] = 1;
+  }
+  return covered.every((value) => value === 1);
+}
+
+/**
  * Lay the authored `w:tcW` preferences over the seed grid.
  *
  * 17.18.87 describes exactly this reconciliation: a cell's `tcW` sets the width of the grid
@@ -248,7 +288,7 @@ function applyWidthClaims(
   tableWidthPt: number,
   fixedGrid: boolean
 ): (number | undefined)[] {
-  // A stated total or a complete fixed grid makes the authored columns settled.
+  // A stated total or the narrow stale-preference pattern settles the authored columns.
   const gridIsSettled = tableWidthPt > 0 || fixedGrid;
   const settled: (number | undefined)[] = [];
   for (let index = 0; index < columnCount; index += 1) settled.push(seed[index]);
@@ -343,14 +383,12 @@ export function resolveColumnWidthsPt(input: {
         : 0;
 
   const seed = gridColumnWidthsPt(input.gridCols);
-  // Fixed tables can retain stale cell preferences after their grid is resized. With no
-  // positive table width, taking the maximum expands an otherwise complete fixed grid.
-  // Keep incomplete grids on the existing claim-resolution path so cells can fill gaps.
+  // A complete fixed grid alone does not justify ignoring valid cell preferences.
+  // Only the uniform stale-preference pattern bypasses their normal reconciliation.
   const fixedGrid =
     input.layoutFixed &&
     statedTableWidth <= 0 &&
-    seed.length >= columnCount &&
-    seed.every((width) => width !== undefined);
+    hasUniformStalePreferences(seed, input.claims, columnCount);
   const settled = applyWidthClaims(seed, input.claims, columnCount, statedTableWidth, fixedGrid);
 
   let stated = 0;

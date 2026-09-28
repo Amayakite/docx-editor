@@ -59,6 +59,8 @@ This supports auto-height frames in single-column sections with page, margin, or
 
 <FeatureMatrix category="tables" />
 
+When you report a table width difference, include its grid widths and cell width preferences. The table insertion and cell editing note defines the supported uniform preference pattern. The editor preserves these document properties when you save the file.
+
 Explicit Word compatibility modes 11, 12, and 14 preserve content alignment for supported full-width AutoFit tables. This applies in body, header, footer, text-box, and note stories. The table must have explicit zero indentation, left alignment, zero cell spacing, and consistent outer cell margins. Its complete authored grid must equal the text-column width plus those margins. Other layouts keep their existing geometry, including nested tables and files without an explicit compatibility mode.
 
 Body text wraps beside supported floating tables and below tables that cover the text column. Text does not wrap into gaps of 0.25 inches or less beside floating tables. Captions and headings move past these gaps. The table's text distances keep the authored gap between its border and surrounding text. Text-anchored tables with numeric vertical offsets follow their next ordinary paragraph onto its page and column. Negative offsets remain in place when they clear preceding text. A table that intersects preceding text moves below that text.

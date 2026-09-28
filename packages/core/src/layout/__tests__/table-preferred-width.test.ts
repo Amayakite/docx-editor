@@ -15,6 +15,7 @@ import {
   type OoxmlPart,
 } from '../../store/package/ooxml-tree.ts';
 import { applyTreeOp } from '../../store/store/tree-ops.ts';
+import { serializeOoxmlPart } from '../../store/package/ooxml-serialize.ts';
 import { buildStyleCascadeTable } from '../style-cascade.ts';
 import { readTableStructure } from '../semantic-table.ts';
 import { createFixedMeasurer, layoutSemanticDocument } from '../semantic-layout.ts';
@@ -554,6 +555,136 @@ describe('structure memoization over immutable table nodes', () => {
 });
 
 describe('complete fixed grids without a positive table width', () => {
+  for (const tableWidth of ['', '<w:tblW w:w="0" w:type="auto"/>']) {
+    test(`honors the reviewer's larger cell preference: ${tableWidth || 'absent'}`, () => {
+      const structure = structureOf(
+        `<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/>${tableWidth}</w:tblPr>` +
+          `${grid(1200, 1200)}<w:tr>${cell(tcW('2400'))}${cell(tcW('1200'))}</w:tr></w:tbl>`
+      );
+      expect(structure.columnWidthsPt).toEqual([120, 60]);
+    });
+  }
+
+  for (const scenario of [
+    { name: 'uniform growth', widths: [1200, 1800], rows: [[2400, 2400]], expected: [120, 120] },
+    {
+      name: 'nonuniform preferences',
+      widths: [1200, 1800, 4200],
+      rows: [[2400, 2600, 2200]],
+      expected: [120, 130, 210],
+    },
+    {
+      name: 'partial preferences',
+      widths: [1200, 1800, 4200],
+      rows: [[2400, null, 2400]],
+      expected: [120, 90, 210],
+    },
+    {
+      name: 'a later explicit preference',
+      widths: [1200, 1800, 4200],
+      rows: [
+        [2400, 2400, 2400],
+        [3000, 1800, 4200],
+      ],
+      expected: [150, 120, 210],
+    },
+    {
+      name: 'a grid column matching the uniform preference',
+      widths: [1200, 2400, 4200],
+      rows: [[2400, 2400, 2400]],
+      expected: [60, 120, 210],
+    },
+    {
+      name: 'uniform preferences mixed with grid-matching rows',
+      widths: [1247, 1701, 1474, 4535, 907],
+      rows: [
+        [2040, 2040, 2040, 2040, 2040],
+        [1247, 1701, 1474, 4535, 907],
+      ],
+      expected: [62.35, 85.05, 73.7, 226.75, 45.35],
+    },
+    {
+      name: 'two unequal columns with stale preferences',
+      widths: [2041, 7030],
+      rows: [[4873, 4873]],
+      expected: [102.05, 351.5],
+    },
+    {
+      name: 'four unequal columns with stale preferences',
+      widths: [1361, 794, 794, 6123],
+      rows: [[2436, 2436, 2436, 2436]],
+      expected: [68.05, 39.7, 39.7, 306.15],
+    },
+  ]) {
+    test(scenario.name, () => {
+      const rows = scenario.rows
+        .map(
+          (widths) =>
+            `<w:tr>${widths.map((width) => cell(width === null ? '' : tcW(String(width)))).join('')}</w:tr>`
+        )
+        .join('');
+      const structure = structureOf(
+        '<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>' +
+          `${grid(...scenario.widths)}${rows}</w:tbl>`
+      );
+      expect(structure.columnWidthsPt).toEqual(scenario.expected);
+    });
+  }
+
+  test('autofit still honors uniform cell preferences', () => {
+    const structure = structureOf(
+      `<w:tbl><w:tblPr/>${grid(1200, 1800, 4200)}<w:tr>` +
+        `${cell(tcW('2400'))}${cell(tcW('2400'))}${cell(tcW('2400'))}</w:tr></w:tbl>`,
+      600
+    );
+    expect(structure.columnWidthsPt).toEqual([120, 120, 210]);
+  });
+
+  for (const preference of ['<w:tcW w:w="50%" w:type="pct"/>', '<w:tcW w:type="auto"/>']) {
+    test(`does not infer stale widths from a nonabsolute preference: ${preference}`, () => {
+      const structure = structureOf(
+        '<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>' +
+          `${grid(1200, 1800, 4200)}<w:tr>${cell(tcW('2400'))}` +
+          `${cell(`<w:tcPr>${preference}</w:tcPr>`)}${cell(tcW('2400'))}</w:tr></w:tbl>`
+      );
+      expect(structure.columnWidthsPt).toEqual([120, 90, 210]);
+    });
+  }
+
+  test('merged cells retain normal reconciliation for adjacent columns', () => {
+    const structure = structureOf(
+      '<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>' +
+        `${grid(1200, 1800, 4200)}<w:tr>${cell(tcW('2400'))}` +
+        cell('<w:tcPr><w:gridSpan w:val="2"/><w:tcW w:w="4800" w:type="dxa"/></w:tcPr>') +
+        '</w:tr></w:tbl>'
+    );
+    expect(structure.columnWidthsPt).toEqual([120, 90, 210]);
+  });
+
+  for (const scenario of [
+    { grid: [1200, 1200], cells: [2400, 1200], expected: [120, 60] },
+    { grid: [1200, 1800, 4200], cells: [2400, 2400, 2400], expected: [60, 90, 210] },
+  ]) {
+    test(`layout and save/reopen preserve resolved widths: ${scenario.expected}`, () => {
+      const source = part(
+        `<w:document xmlns:w="${W}"><w:body>` +
+          '<w:tbl><w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>' +
+          `${grid(...scenario.grid)}<w:tr>` +
+          scenario.cells.map((width) => cell(tcW(String(width)))).join('') +
+          '</w:tr></w:tbl></w:body></w:document>',
+        '/word/document.xml'
+      );
+      const before = serializeOoxmlPart(source);
+      for (const document of [source, part(before, source.name)]) {
+        const layout = layoutSemanticDocument(document, 0, { measurer: createFixedMeasurer() });
+        const table = layout.pages[0]!.fragments.find((fragment) => fragment.kind === 'table')!;
+        expect(table.rows[0]!.cells.map((item) => item.box.width)).toEqual(scenario.expected);
+        expect(table.box.width).toBe(total(scenario.expected));
+        expect(serializeOoxmlPart(document)).toBe(before);
+      }
+    });
+  }
+
   for (const tableWidth of ['', '<w:tblW w:w="0" w:type="auto"/>']) {
     test(`retains unequal columns despite uniform cell preferences: ${tableWidth || 'absent'}`, () => {
       const table = tableNode(
