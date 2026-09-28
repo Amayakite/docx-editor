@@ -79,7 +79,7 @@ import {
   composeFlowKeys,
   keepNextChains,
   paragraphKeeps,
-  MAX_KEEP_NEXT_CHAIN,
+  KEEP_BREAK_RETRY_ALLOWANCE,
 } from './pagination-keeps.ts';
 import { DEFAULT_RUN_STYLE, resolveRunStyle } from './run-style.ts';
 import {
@@ -182,7 +182,8 @@ import {
   layoutSemanticDocumentWithNotes,
   notesReserveContextKey,
 } from './note-pagination.ts';
-import { passProducerOf, producerWithControlContext } from './pass-producer.ts';
+import { passProducerOf } from './pass-producer.ts';
+import { documentProjectionProducer } from './document-property-context.ts';
 
 import { noteExclusionLayoutPass } from './exclusion-pass-observer.ts';
 export { observeExclusionLayoutPassesForTest } from './exclusion-pass-observer.ts';
@@ -301,13 +302,7 @@ export function layoutSemanticDocument(
     fieldCodeRanges: options.showFieldCodes ? tocCodeRanges(part) : undefined,
     tocLinkStyleRanges: linkStyleRanges,
     displayMode,
-    producer: producerWithControlContext(
-      producerWithControlContext(
-        options.showFieldCodes ? `${options.producer ?? ''}|field-codes` : options.producer,
-        controlToken
-      ),
-      tocLinkStyleToken(linkStyleRanges)
-    ),
+    producer: documentProjectionProducer(options, controlToken, tocLinkStyleToken(linkStyleRanges)),
     tocFieldChromeParagraphIds:
       options.tocFieldChromeParagraphIds ?? tocFieldChromeParagraphIds(part),
     emptyTocPlaceholderParagraphIds:
@@ -1998,6 +1993,17 @@ function layoutBlocksPass(
   const keepChains = keepNextChains(
     {
       blocks: prepared,
+      dynamicBlock: (at) =>
+        prepared[at]?.kind === 'paragraph' &&
+        anchorsTopAndBottomDrawing(prepared[at].paragraph, options.inlineDrawingLayout),
+      contextKey: () => {
+        const zones = pageExclusionZones();
+        const base = `${columnWidth()}:${markOnBreakSheet}:`;
+        return zones.length
+          ? base +
+              `${flowColumnIndex}:${cursorY}:${previousSpaceAfter}:${firstParagraphOfSection}:${exclusionLayoutToken(zones)}`
+          : base;
+      },
       linesFor: (at) => {
         const member = prepareBlock(bodies[at]!, columnWidth());
         return member.kind === 'paragraph' ? breakBlock(member, at) : [];
@@ -2617,7 +2623,7 @@ function layoutBlocksPass(
     // future rule that could cycle, and fails OPEN at the natural break rather than throwing.
     let fragmentFirstLine = 0;
     let retreats = 0;
-    let maxRetreats = lines.length + MAX_KEEP_NEXT_CHAIN;
+    let maxRetreats = lines.length + KEEP_BREAK_RETRY_ALLOWANCE;
     let emptyFurnitureAdvances = 0;
 
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
@@ -2723,7 +2729,7 @@ function layoutBlocksPass(
           // placement-specific and cannot travel with a pre-broken line.
           rebreakInCurrentColumn(nextOffset, cursorY);
           appliedSkipByLineIndex.clear();
-          maxRetreats = Math.max(maxRetreats, lines.length + MAX_KEEP_NEXT_CHAIN);
+          maxRetreats = Math.max(maxRetreats, lines.length + KEEP_BREAK_RETRY_ALLOWANCE);
           fragmentFirstLine = 0;
           if (retreated) retreats += 1;
           lineIndex = -1;
@@ -2834,7 +2840,7 @@ function layoutBlocksPass(
         ) {
           rebreakInCurrentColumn(pendingLine.end, cursorY);
           appliedSkipByLineIndex.clear();
-          maxRetreats = Math.max(maxRetreats, lines.length + MAX_KEEP_NEXT_CHAIN);
+          maxRetreats = Math.max(maxRetreats, lines.length + KEEP_BREAK_RETRY_ALLOWANCE);
           fragmentFirstLine = 0;
           lineIndex = -1;
           continue;
@@ -2862,7 +2868,7 @@ function layoutBlocksPass(
         if (!isLastLine && (priorPageHadExclusions || pageExclusionZones().length > 0)) {
           rebreakInCurrentColumn(pendingLine.end, cursorY);
           appliedSkipByLineIndex.clear();
-          maxRetreats = Math.max(maxRetreats, lines.length + MAX_KEEP_NEXT_CHAIN);
+          maxRetreats = Math.max(maxRetreats, lines.length + KEEP_BREAK_RETRY_ALLOWANCE);
           fragmentFirstLine = 0;
           lineIndex = -1;
           continue;
