@@ -21,6 +21,74 @@ Semantic layout SHALL resolve and represent the D8 run and paragraph property bo
 - **WHEN** accepted run properties, paragraph spacing/indents/tabs/numbering, pagination controls, `w:spacing` before/after, `w:contextualSpacing`, any `w:pBdr` edge, inline page breaks, or per-section geometry occur in the paragraph fixture
 - **THEN** page, fragment, line, and style-span output reflects each property with stable source ranges
 
+#### Scenario: Consecutive paragraphs share an exact-height positioned frame
+- **WHEN** consecutive body paragraphs declare identical bounded `w:framePr` values with numeric page, margin, or text anchors and `w:h` paired with `w:hRule="exact"`
+- **THEN** layout stacks their content in one positioned frame, uses the authored width and height for wrapping exclusion, clips painted content to that frame, and preserves every paragraph identity and source range
+
+#### Scenario: Invalid or unsupported frame data is encountered
+- **WHEN** `w:framePr` contains an out-of-range value, an unknown enumeration value, unsupported nested content, or a frame group that cannot leave usable room on a fresh sheet
+- **THEN** semantic layout refuses the positioned-frame projection and keeps the paragraph in ordinary flow without approximating the frame
+
+#### Scenario: Wrapping defaults do not create positioned frames
+- **WHEN** direct or inherited `w:framePr` supplies wrapping defaults without size, position, or anchor properties
+- **THEN** paragraphs retain ordinary flow and their explicit page breaks
+
+#### Scenario: Frame attributes inherit individually
+- **WHEN** direct frame properties override part of a paragraph style's frame properties
+- **THEN** unspecified attributes retain their inherited values and equivalent adjacent frames remain grouped
+
+#### Scenario: Inline pictures remain in their frame
+- **WHEN** a supported frame contains inline pictures
+- **THEN** their line geometry, alignment, clipping, and following text use the shared frame
+
+#### Scenario: A frame stays outside the body area
+- **WHEN** a frame wrapping band stays entirely above or below the body area
+- **THEN** it does not advance the text position of a following continuous section or create an extra empty page
+
+#### Scenario: Frame height rules are resolved
+- **WHEN** a bounded paragraph frame uses explicit `hRule="auto"`, `hRule="atLeast"`, or `hRule="exact"`
+- **THEN** layout respectively uses content height, the greater of content and authored height, or the authored clipped height, and ignores `w:h` when the rule is `auto`
+
+#### Scenario: The frame height rule is omitted
+- **WHEN** a frame supplies positive `w:h` without `w:hRule`
+- **THEN** layout uses that height as a minimum; zero or omitted height uses content height
+
+#### Scenario: Frame width is automatic
+- **WHEN** consecutive matching frame paragraphs omit `w:w`
+- **THEN** layout uses the containing text column as their shared frame width and applies paragraph alignment inside that width
+
+#### Scenario: Frame alignment supersedes offsets
+- **WHEN** `xAlign` or a permitted `yAlign` is present
+- **THEN** layout aligns the complete frame within its page, margin, or text anchor box and ignores the corresponding numeric offset
+
+#### Scenario: Inside and outside alignment follows the sheet
+- **WHEN** a frame uses horizontal `inside` or `outside`
+- **THEN** layout selects the binding or outer edge from the physical page parity
+
+#### Scenario: Every frame wrap value is resolved
+- **WHEN** a frame uses `auto`, `around`, `tight`, `through`, `none`, or `notBeside`
+- **THEN** layout applies deterministic rectangular scanline exclusion, with `auto` using `around` and `none`, `notBeside`, or vertical `inline` alignment preventing beside wrapping
+
+#### Scenario: Margin drop cap is positioned outside the text column
+- **WHEN** a bounded simple frame declares `dropCap="margin"` and a valid line count
+- **THEN** layout sizes it from its content, aligns its baseline to the requested anchor-line band, and places it outside the text column in the paragraph direction
+
+#### Scenario: Dropped cap respects the supported paragraph direction
+- **WHEN** a bounded simple frame declares `dropCap="drop"`
+- **THEN** layout places a left-to-right cap at the leading text edge and falls back to ordinary flow for a right-to-left cap
+
+#### Scenario: Multiline drop caps retain ordinary flow
+- **WHEN** a dropped or margin cap wraps into more than one line
+- **THEN** layout retains ordinary flow so every cap line stays clear of the following body text
+
+#### Scenario: Locked frame survives supported edits
+- **WHEN** a frame declares `anchorLock` and supported text, property, split, or join operations edit its frame or anchor paragraphs
+- **THEN** the canonical order and normalized save keep the frame directly before the same logical anchor, and unsupported frame movement is not approximated
+
+#### Scenario: Negative frame position avoids earlier-text overlap
+- **WHEN** a frame declares a bounded negative `w:y`
+- **THEN** layout retains page-relative and margin-relative positions, but a negative text-relative position falls back to ordinary flow
+
 #### Scenario: Inline page break splits a paragraph across pages
 - **WHEN** a paragraph contains `w:br w:type="page"` between inline content
 - **THEN** layout places content before the break on the current page and content after the break on the next page while preserving one paragraph identity
@@ -52,6 +120,12 @@ Semantic layout SHALL resolve and represent the D8 run and paragraph property bo
 #### Scenario: Page-furniture PAGE and NUMPAGES project per sheet
 - **WHEN** a read-only header or footer story contains allowlisted complex `PAGE`/`NUMPAGES` field instructions
 - **THEN** layout projects the physical page index and document page count into that furniture without evaluating other field instructions or claiming body-field support
+
+#### Scenario: Directly formatted centered footer frame shares its anchor band
+- **WHEN** a supported centered PAGE footer frame uses `auto` or `around` wrapping with direct line spacing, unused tab stops, and a nonnegative first-line indent
+- **THEN** the frame and empty anchor share one footer band, the indent contributes to horizontal placement, and the footer does not reserve a second paragraph height
+- **AND** page-field updates, paragraph identities, and save output remain stable
+- **AND** unsupported indents, paragraph decorations, and before or after spacing retain ordinary flow
 
 #### Scenario: Deferred content is encountered
 - **WHEN** paragraph traversal encounters a deferred element

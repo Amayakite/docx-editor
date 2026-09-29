@@ -26,7 +26,7 @@ import { paragraphIsRtl, spanContentX } from './rtl-paragraph.ts';
 import * as sectionPrep from './section-preparation.ts';
 import { resolveListAutoSpacing, listAutoSpacingFlowKeys } from './list-auto-spacing.ts';
 import { emptyParagraphStyleFields } from './empty-paragraph-style.ts';
-import { positionedFrameBottom } from './paragraph-frame.ts';
+import { frameOrigins, positionedFrameBottom } from './paragraph-frame.ts';
 import { ParagraphFrameFlow, paragraphFrameFlowKeys } from './paragraph-frame-flow.ts';
 // Semantic paragraph layout over the canonical tree (tasks 7.1, 7.3).
 //
@@ -973,10 +973,7 @@ function layoutBlocksPass(
     const keyedDrawingToken = withDrawingContext(paragraphDrawingToken, hasInlineDrawingContext);
     let entry: PreparedBlock;
     if (block.kind === 'table') {
-      // `nodeToken` hashes the whole subtree, so one key covers every cell edit. The list
-      // token is the CELL aggregate plus any hosted text-box stories: a renumbering that
-      // only moves ordinals inside a cell leaves the subtree byte-identical, and this token
-      // is the only thing that can move the key with it.
+      // Include cell and hosted-story list tokens to invalidate keys after renumbering.
       entry = {
         kind: 'table',
         table: block,
@@ -1005,7 +1002,13 @@ function layoutBlocksPass(
       );
       const frame =
         columns.count === 1 && !options.disabledParagraphFrameIds?.has(block.id)
-          ? resolveParagraphFrame(block, preparedParagraph, measurer, styleCascade)
+          ? resolveParagraphFrame(
+              block,
+              preparedParagraph,
+              measurer,
+              styleCascade,
+              options.inlineDrawingLayout
+            )
           : undefined;
       if (frame)
         preparedParagraph = resolveParagraphLayoutInputs(
@@ -1419,14 +1422,16 @@ function layoutBlocksPass(
   ): void => {
     const inset = insetsFor(pages.length).top;
     for (const fragment of paragraphFrames.publish(
-      {
-        page: { x: -geometry.margin.left, y: -inset },
-        margin: { x: 0, y: Math.abs(geometry.margin.top) - inset },
-        text: { x: columnLeft(), y: anchorY },
-      },
+      frameOrigins(pageIndexStart + pages.length + 1, geometry, inset, {
+        x: columnLeft(),
+        y: anchorY,
+        width: columnWidth(),
+        height: contentHeight() - anchorY,
+      }),
       anchorId,
       flowColumnIndex,
-      anchorLines
+      anchorLines,
+      markPageParityRead
     ))
       pageFragments.push(fragment);
   };
@@ -2913,7 +2918,7 @@ function layoutBlocksPass(
     endCursorY = Math.max(
       endCursorY,
       tableWrap.floatingTextTableBottom(pages.at(-1)!.fragments),
-      positionedFrameBottom(pages.at(-1)!.fragments)
+      positionedFrameBottom(pages.at(-1)!.fragments, pages.at(-1)!.contentBox.height)
     );
   }
   let terminalFlushAttempts = 0;

@@ -1,28 +1,44 @@
 import type { OoxmlElement, OoxmlProperty } from '@docx-editor.dev/core/store';
-import { shiftInlineDrawingRecord } from './drawing-layout.ts';
+import { shiftInlineDrawingRecord, type InlineDrawingLayoutContext } from './drawing-layout.ts';
+import { isLegacyVmlAtom } from '../store/package/legacy-vml-projection.ts';
+import { isRunLevelMcAlternateContent } from '../store/package/drawing-projection.ts';
 import { framedTokenJoin } from './layout-cache.ts';
 import type {
   BlockFragmentRecord,
   LayoutBox,
   ParagraphFragmentRecord,
 } from './semantic-records.ts';
+import type { TableFloatXSpec, TableFloatYSpec } from './table-float-properties.ts';
 
 const MAX_FRAME_PT = 1584;
 const MAX_FRAME_NODES = 10000;
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 
-/** Numeric, auto-height text frames. Other frame variants retain ordinary flow. */
+export type ParagraphFrameHeightRule = 'auto' | 'atLeast' | 'exact';
+export type ParagraphFrameWrap = 'auto' | 'around' | 'tight' | 'through' | 'none' | 'notBeside';
+
+/** Bounded text-frame properties resolved for semantic layout. */
 export interface ParagraphFrame {
   /** Explicit-size drop cap aligned against this many lines of its anchor paragraph. */
   readonly dropCapLines?: number;
+  readonly dropCap?: 'drop' | 'margin';
+  readonly dropCapRtl?: boolean;
   readonly x: number;
   readonly y: number;
+  /** Zero until the containing text width resolves an omitted `w:w`. */
   readonly width: number;
+  readonly autoWidth: boolean;
+  /** Authored exact or minimum height. Absent for `hRule="auto"`. */
+  readonly height?: number;
+  readonly heightRule: ParagraphFrameHeightRule;
   readonly horizontalAnchor: 'page' | 'margin' | 'text';
   readonly verticalAnchor: 'page' | 'margin' | 'text';
+  readonly xAlign?: TableFloatXSpec;
+  readonly yAlign?: TableFloatYSpec;
+  readonly anchorLocked: boolean;
   /** Equal authored frame properties group adjacent paragraphs into one frame. */
   readonly token: string;
-  readonly wrap: 'around' | 'none' | 'notBeside';
+  readonly wrap: ParagraphFrameWrap;
   readonly hSpace: number;
   readonly vSpace: number;
 }
@@ -34,12 +50,28 @@ function coordinate(value: string | undefined): number | null {
 }
 
 /** Reject content whose pagination or external anchors need a separate frame story. */
-export function supportsParagraphFrameContent(paragraph: OoxmlElement): boolean {
+export function supportsParagraphFrameContent(
+  paragraph: OoxmlElement,
+  drawings?: InlineDrawingLayoutContext
+): boolean {
   const pending = [paragraph];
   let count = 0;
   while (pending.length) {
     const node = pending.pop()!;
-    if (++count > MAX_FRAME_NODES || node.namespaceUri !== W) return false;
+    if (++count > MAX_FRAME_NODES || node.localName === 'object') return false;
+    if (node.kind === 'drawing' || isLegacyVmlAtom(node) || isRunLevelMcAlternateContent(node)) {
+      const projection =
+        drawings?.projectionForAtom?.(node.id) ??
+        (node.kind === 'drawing' ? drawings?.project(node) : undefined);
+      if (
+        projection?.kind !== 'inline' ||
+        projection.textboxStory ||
+        drawings?.resourceOf(projection).kind !== 'ready'
+      )
+        return false;
+      continue;
+    }
+    if (node.namespaceUri !== W) return false;
     if (
       [
         'drawing',
@@ -69,39 +101,68 @@ export function supportsParagraphFrameContent(paragraph: OoxmlElement): boolean 
   return true;
 }
 
+/** Direct frame attributes override only the attributes supplied by style layers. */
+export function paragraphFrameAttributes(
+  properties: readonly OoxmlProperty[]
+): OoxmlProperty['attributes'] | undefined {
+  let attributes: OoxmlProperty['attributes'] | undefined;
+  for (const property of properties)
+    if (property.localName === 'framePr') attributes = { ...attributes, ...property.attributes };
+  return attributes;
+}
+
 export function readParagraphFrame(properties: readonly OoxmlProperty[]): ParagraphFrame | null {
-  let property: OoxmlProperty | undefined;
-  for (const item of properties) if (item.localName === 'framePr') property = item;
-  if (!property?.attributes) return null;
-  const attributes = property.attributes;
+  const attributes = paragraphFrameAttributes(properties);
+  if (!attributes) return null;
+  // Wrapping defaults alone do not turn ordinary paragraphs into positioned frames.
+  if (
+    !['w', 'h', 'x', 'y', 'xAlign', 'yAlign', 'hAnchor', 'vAnchor'].some(
+      (name) => attributes[name] !== undefined
+    )
+  )
+    return null;
   const allowed = new Set([
     'x',
     'y',
     'w',
+    'h',
+    'hRule',
     'hAnchor',
     'vAnchor',
     'wrap',
     'anchorLock',
     'hSpace',
     'vSpace',
+    'dropCap',
+    'lines',
+    'xAlign',
+    'yAlign',
   ]);
   if (Object.keys(attributes).some((name) => !allowed.has(name))) return null;
   const wrap = attributes.wrap ?? 'around';
-  if (!['around', 'none', 'notBeside'].includes(wrap)) return null;
+  if (!['auto', 'around', 'tight', 'through', 'none', 'notBeside'].includes(wrap)) return null;
   const hSpace = coordinate(attributes.hSpace ?? '0'),
     vSpace = coordinate(attributes.vSpace ?? '0');
   if (hSpace === null || vSpace === null || hSpace < 0 || vSpace < 0) return null;
-  if (
-    attributes.anchorLock !== undefined &&
-    !['0', '1', 'true', 'false', 'on', 'off'].includes(attributes.anchorLock)
-  )
+  const anchorLock = attributes.anchorLock;
+  if (anchorLock !== undefined && !['0', '1', 'true', 'false', 'on', 'off'].includes(anchorLock)) {
     return null;
-  // `w:x` and `w:y` are optional and default to zero (ECMA-376 17.3.1.11); a heading framed
-  // at the text anchor's own left edge is written without them.
-  const x = coordinate(attributes.x ?? '0'),
-    y = coordinate(attributes.y ?? '0'),
-    width = coordinate(attributes.w);
-  if (x === null || y === null || width === null || width <= 0) return null;
+  }
+  const xAlign = attributes.xAlign;
+  if (xAlign !== undefined && !['left', 'center', 'right', 'inside', 'outside'].includes(xAlign)) {
+    return null;
+  }
+  const yAlign = attributes.yAlign;
+  if (
+    yAlign !== undefined &&
+    !['inline', 'top', 'center', 'bottom', 'inside', 'outside'].includes(yAlign)
+  ) {
+    return null;
+  }
+  const dropCap = attributes.dropCap;
+  if (dropCap !== undefined && !['none', 'drop', 'margin'].includes(dropCap)) return null;
+  if (dropCap === 'drop' || dropCap === 'margin') return null;
+
   // Word defaults both anchors to text (MS-OE376 2.1.48).
   const horizontalAnchor = attributes.hAnchor ?? 'text';
   const verticalAnchor = attributes.vAnchor ?? 'text';
@@ -110,8 +171,28 @@ export function readParagraphFrame(properties: readonly OoxmlProperty[]): Paragr
     !['page', 'margin', 'text'].includes(verticalAnchor)
   )
     return null;
-  // Earlier-text reflow is outside this lane; preserve upward text frames in ordinary flow.
+
+  // An alignment supersedes the corresponding offset, so an ignored malformed offset cannot
+  // turn a valid frame into ordinary flow.
+  const x = xAlign ? 0 : coordinate(attributes.x ?? '0');
+  const effectiveYAlign = verticalAnchor === 'text' ? undefined : yAlign;
+  const y = effectiveYAlign ? 0 : coordinate(attributes.y ?? '0');
+  const width = attributes.w === undefined ? 0 : coordinate(attributes.w);
+  if (x === null || y === null || width === null || width < 0) return null;
   if (verticalAnchor === 'text' && y < 0) return null;
+  const autoWidth = attributes.w === undefined;
+  if (!autoWidth && width <= 0) return null;
+
+  const heightRule =
+    attributes.hRule ??
+    (attributes.h !== undefined && coordinate(attributes.h) !== 0 ? 'atLeast' : 'auto');
+  if (!['auto', 'atLeast', 'exact'].includes(heightRule)) return null;
+  let height: number | undefined;
+  if (heightRule !== 'auto') {
+    const parsed = coordinate(attributes.h ?? '0');
+    if (parsed === null || parsed < 0 || (heightRule === 'exact' && parsed === 0)) return null;
+    height = parsed;
+  }
   const token = framedTokenJoin(
     Object.keys(attributes)
       .sort()
@@ -121,8 +202,14 @@ export function readParagraphFrame(properties: readonly OoxmlProperty[]): Paragr
     x,
     y,
     width,
-    wrap: wrap as ParagraphFrame['wrap'],
-    hSpace,
+    autoWidth,
+    ...(height === undefined ? {} : { height }),
+    heightRule: heightRule as ParagraphFrameHeightRule,
+    ...(xAlign ? { xAlign: xAlign as TableFloatXSpec } : {}),
+    ...(effectiveYAlign ? { yAlign: effectiveYAlign as TableFloatYSpec } : {}),
+    anchorLocked: ['1', 'true', 'on'].includes(anchorLock ?? ''),
+    wrap: (yAlign === 'inline' ? 'notBeside' : wrap) as ParagraphFrameWrap,
+    hSpace: wrap === 'around' || wrap === 'auto' ? hSpace : 0,
     vSpace,
     horizontalAnchor: horizontalAnchor as ParagraphFrame['horizontalAnchor'],
     verticalAnchor: verticalAnchor as ParagraphFrame['verticalAnchor'],
@@ -132,19 +219,82 @@ export function readParagraphFrame(properties: readonly OoxmlProperty[]): Paragr
 
 /** Reference origins use page-content coordinates, including negative page origins. */
 export interface ParagraphFrameOrigins {
-  readonly page: { readonly x: number; readonly y: number };
-  readonly margin: { readonly x: number; readonly y: number };
-  readonly text: { readonly x: number; readonly y: number };
+  readonly pageNumber: number;
+  readonly page: LayoutBox;
+  readonly margin: LayoutBox;
+  readonly text: LayoutBox;
+}
+
+export function frameOrigins(
+  pageNumber: number,
+  geometry: Readonly<{
+    width: number;
+    height: number;
+    margin: Readonly<{ top: number; right: number; bottom: number; left: number }>;
+  }>,
+  inset: number,
+  text: LayoutBox
+): ParagraphFrameOrigins {
+  const boundedText = { ...text, height: Math.max(0, text.height) };
+  return {
+    pageNumber,
+    page: {
+      x: -geometry.margin.left,
+      y: -inset,
+      width: geometry.width,
+      height: geometry.height,
+    },
+    margin: {
+      x: 0,
+      y: Math.abs(geometry.margin.top) - inset,
+      width: geometry.width - geometry.margin.left - geometry.margin.right,
+      height: geometry.height - geometry.margin.top - geometry.margin.bottom,
+    },
+    text: boundedText,
+  };
+}
+
+export function paragraphFrameOrigin(
+  frame: ParagraphFrame,
+  origins: ParagraphFrameOrigins,
+  frameSize: Readonly<{ width: number; height: number }>
+): Readonly<{ x: number; y: number }> {
+  if (frame.dropCap === 'margin') {
+    const x = frame.dropCapRtl
+      ? origins.text.x + origins.text.width + frame.hSpace
+      : origins.text.x - frameSize.width - frame.hSpace;
+    return { x, y: origins.text.y };
+  }
+  const horizontal = origins[frame.horizontalAnchor];
+  const slackX = horizontal.width - frameSize.width;
+  let x: number;
+  if (frame.xAlign === 'center') x = horizontal.x + slackX / 2;
+  else if (frame.xAlign === 'right') x = horizontal.x + slackX;
+  else if (frame.xAlign === 'inside')
+    x = origins.pageNumber % 2 === 1 ? horizontal.x : horizontal.x + slackX;
+  else if (frame.xAlign === 'outside')
+    x = origins.pageNumber % 2 === 1 ? horizontal.x + slackX : horizontal.x;
+  else x = horizontal.x + frame.x;
+
+  const vertical = origins[frame.verticalAnchor];
+  const slackY = vertical.height - frameSize.height;
+  let y: number;
+  if (frame.verticalAnchor === 'text' || !frame.yAlign) y = vertical.y + frame.y;
+  else if (frame.yAlign === 'center') y = vertical.y + slackY / 2;
+  else if (frame.yAlign === 'bottom' || frame.yAlign === 'outside') y = vertical.y + slackY;
+  else if (frame.yAlign === 'inline') y = origins.text.y;
+  else y = vertical.y;
+  return { x, y };
 }
 
 /** Translate all published geometry together; source ranges and paragraph alignment stay authored. */
 export function positionParagraphFrame(
   fragment: ParagraphFragmentRecord,
   frame: ParagraphFrame,
-  origins: ParagraphFrameOrigins
+  origins: ParagraphFrameOrigins,
+  frameSize: Readonly<{ width: number; height: number }>
 ): ParagraphFragmentRecord {
-  const dx = origins[frame.horizontalAnchor].x + frame.x;
-  const dy = origins[frame.verticalAnchor].y + frame.y;
+  const { x: dx, y: dy } = paragraphFrameOrigin(frame, origins, frameSize);
   return { ...translateParagraphFragment(fragment, dx, dy), outOfFlow: true };
 }
 
@@ -189,12 +339,16 @@ export function translateParagraphFragment(
   };
 }
 
-/** A continuous section starts below prior frame ink when exclusion zones cannot cross sections. */
-export function positionedFrameBottom(blocks: readonly BlockFragmentRecord[]): number {
+/** A continuous section clears frames whose wrapping bands intersect the body area. */
+export function positionedFrameBottom(
+  blocks: readonly BlockFragmentRecord[],
+  contentHeight: number
+): number {
   let bottom = 0;
   for (const block of blocks) {
     if (block.kind !== 'paragraph' || !block.positionedFrame) continue;
     const { box, vSpace } = block.positionedFrame;
+    if (box.y - vSpace >= contentHeight || box.y + box.height + vSpace <= 0) continue;
     bottom = Math.max(bottom, box.y + box.height + vSpace);
   }
   return bottom;
