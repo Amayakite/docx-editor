@@ -50,6 +50,8 @@ export interface PendingLine {
   deletedRanges?: readonly ModelRange[];
   /** Vertical gap inserted before this line to clear a drawing exclusion band. */
   exclusionSkipBefore?: number;
+  /** Clearance inherited by an empty anchor paragraph from other drawing bands. */
+  anchorClearanceBefore?: number;
   /**
    * The first-line offset this line was broken with: the paragraph's first line, and the
    * first line after page breaks that open it ({@link holdsOnlyPageBreak}). Absent when zero.
@@ -303,10 +305,17 @@ export function coalesceIdeographicSpans(line: PendingLine): void {
 
 /** Vertical extent of a pending line for flow/pagination budget checks (skip + box + optional tail). */
 export function pendingLineFlowExtent(
-  line: Pick<PendingLine, 'height' | 'trailingSpacing' | 'exclusionSkipBefore'>,
+  line: Pick<
+    PendingLine,
+    'height' | 'trailingSpacing' | 'exclusionSkipBefore' | 'anchorClearanceBefore'
+  >,
   tail = 0
 ): number {
-  return (line.exclusionSkipBefore ?? 0) + Math.max(0, line.height - line.trailingSpacing) + tail;
+  return (
+    (line.anchorClearanceBefore ?? line.exclusionSkipBefore ?? 0) +
+    Math.max(0, line.height - line.trailingSpacing) +
+    tail
+  );
 }
 
 /** Recompute topAndBottom skip at placement time from live page zones and absolute line top. */
@@ -323,12 +332,17 @@ export function pendingLineExclusionSkipAtPlacement(
 
 export function pendingLineFlowExtentAtPlacement(
   lineTopY: number,
-  line: Pick<PendingLine, 'height' | 'trailingSpacing' | 'exclusionSkipBefore'>,
+  line: Pick<
+    PendingLine,
+    'height' | 'trailingSpacing' | 'exclusionSkipBefore' | 'anchorClearanceBefore'
+  >,
   zones: readonly ExclusionZone[],
   tail = 0
 ): number {
   const skip = pendingLineExclusionSkipAtPlacement(line, lineTopY, zones);
-  return skip + Math.max(0, line.height - line.trailingSpacing) + tail;
+  return (
+    (line.anchorClearanceBefore ?? skip) + Math.max(0, line.height - line.trailingSpacing) + tail
+  );
 }
 
 /**
@@ -363,6 +377,9 @@ export function frozenLine(line: PendingLine): PendingLine {
     ...(line.spaceShrink ? { spaceShrink: true } : {}),
     ...(line.deletedRanges ? { deletedRanges: Object.freeze(line.deletedRanges) } : {}),
     ...(line.exclusionSkipBefore ? { exclusionSkipBefore: line.exclusionSkipBefore } : {}),
+    ...(line.anchorClearanceBefore !== undefined
+      ? { anchorClearanceBefore: line.anchorClearanceBefore }
+      : {}),
     ...(line.firstLineOffset ? { firstLineOffset: line.firstLineOffset } : {}),
     ...(line.wrapSegment ? { wrapSegment: Object.freeze({ ...line.wrapSegment }) } : {}),
     ...(line.anchorRevisions ? { anchorRevisions: Object.freeze(line.anchorRevisions) } : {}),

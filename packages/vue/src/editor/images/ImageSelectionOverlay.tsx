@@ -146,6 +146,10 @@ export const ImageSelectionOverlay = defineComponent({
         if (!container) return;
         const onPointerDown = (event: PointerEvent): void => {
           const element = event.target instanceof Element ? event.target : null;
+          if (element?.closest('.docx-drawing-textbox-content')) {
+            focusRequestedForDrawingRef.value = null;
+            return;
+          }
           const drawingId = element
             ?.closest<HTMLElement>('[data-drawing-node-id]')
             ?.getAttribute('data-drawing-node-id');
@@ -252,6 +256,9 @@ export const ImageSelectionOverlay = defineComponent({
       // the session is stamped against the flushed layout. Preconditions are captured
       // after it, so a flush that lands buffered input cannot stamp a selection the
       // flush is about to move.
+      const scope = editor.surface.activeScope();
+      if (scope.kind === 'frame' && !editor.surface.selectDrawing(active.id, scope.hostParagraphId))
+        return;
       const layout = editor.surface.layout();
       const pre = captureImageMutationPreconditions(editor);
       if (!pre) return;
@@ -373,7 +380,12 @@ export const ImageSelectionOverlay = defineComponent({
           deltaXPt: dx,
           deltaYPt: dy,
           transform: active.transform,
-          preserveAspect: resizePreservesAspect(handle, active.aspectLocked, event.shiftKey),
+          preserveAspect: resizePreservesAspect(
+            handle,
+            active.aspectLocked,
+            event.shiftKey,
+            active.textbox
+          ),
           kind: active.kind,
         });
         editor.exec({
@@ -461,7 +473,8 @@ export const ImageSelectionOverlay = defineComponent({
             preserveAspect: resizePreservesAspect(
               current.session.handle,
               current.bounds.aspectLocked,
-              event.shiftKey
+              event.shiftKey,
+              current.bounds.textbox
             ),
             kind: current.session.kind,
           });
@@ -496,6 +509,7 @@ export const ImageSelectionOverlay = defineComponent({
               deltaYPt: deltaY,
               accumulatedScrollPt: current.accumulatedScrollPt,
               aspectLocked: current.bounds.aspectLocked,
+              textbox: current.bounds.textbox,
               shiftKey: event.shiftKey,
               anchorFrameOrigin: current.session.anchorFrameOrigin,
             });
@@ -575,6 +589,7 @@ export const ImageSelectionOverlay = defineComponent({
               class={`docx-image-selection-overlay__frame${
                 showMove ? ' docx-editor-one-surface__overlay-control' : ''
               }`}
+              data-textbox={current.textbox ? 'true' : undefined}
               role="group"
               aria-label={t('imageOverlay.selection')}
               style={{

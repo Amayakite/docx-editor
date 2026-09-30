@@ -1,3 +1,4 @@
+import { insertTextbox } from './textbox-commands.ts';
 import { fragmentContainsClipboardObject } from './clipboard-object-selection.ts';
 import { fragmentFromHtml } from './clipboard-fragment-codec.ts';
 import { FIELD_CODE_INPUT_REFUSAL } from './surface-field-code-input.ts';
@@ -35,7 +36,11 @@ import {
   execSetNoteProperties,
 } from './docx-editor-notes.ts';
 import { isTableEditorCommand, planTableCommand } from './table-command-plan.ts';
-import { execImageCommand, isImageCommand } from './docx-editor-images.ts';
+import {
+  execImageCommand,
+  isImageCommand,
+  resolveSelectedDrawingRecord,
+} from './docx-editor-images.ts';
 import { lineSpacingAttributes, spacingSideAttributes } from './paragraph-format-write.ts';
 
 /**
@@ -350,6 +355,8 @@ export function execEditorCommand(
         };
       }
       break;
+    case 'insertTextBox':
+      return insertTextbox(mounted);
     case 'insertText':
       mounted.type(command.text);
       if (
@@ -360,6 +367,9 @@ export function execEditorCommand(
       }
       break;
     case 'deleteText':
+      if (resolveSelectedDrawingRecord(mounted)) {
+        return execImageCommand(mounted, { type: 'deleteImage' }, options?.editor);
+      }
       mounted.deleteSelection();
       break;
     case 'proposeInsertion':

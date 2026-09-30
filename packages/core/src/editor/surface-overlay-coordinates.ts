@@ -94,11 +94,12 @@ export function overlayHostOrigin(surfaceElement: HTMLElement | null): {
 export function resizePreservesAspect(
   handle: ImageResizeHandle,
   aspectLocked: boolean,
-  shiftKey: boolean
+  shiftKey: boolean,
+  textbox = false
 ): boolean {
   if (aspectLocked) return true;
   if (handle.length === 1) return false;
-  return !shiftKey;
+  return textbox ? shiftKey : !shiftKey;
 }
 
 const HANDLE_ORDER: readonly ImageResizeHandle[] = ['e', 'se', 's', 'sw', 'w', 'nw', 'n', 'ne'];
@@ -237,7 +238,11 @@ export function computeImageResizeResult(options: {
   if (
     options.kind === 'anchored' &&
     options.startPosition &&
-    (screenHandle.includes('w') || screenHandle.includes('n'))
+    (screenHandle.includes('w') ||
+      screenHandle.includes('n') ||
+      (options.anchorFrameOrigin &&
+        ((options.startPosition.horizontalEmu === undefined && widthPt !== startWidthPt) ||
+          (options.startPosition.verticalEmu === undefined && heightPt !== startHeightPt))))
   ) {
     if (options.startPosition.mode === 'simple') {
       const deltaXEmu = screenHandle.includes('w')
@@ -260,12 +265,14 @@ export function computeImageResizeResult(options: {
         ...(options.startPosition.relativeToV !== undefined
           ? { relativeToV: options.startPosition.relativeToV }
           : {}),
-        ...(screenHandle.includes('w')
+        ...(screenHandle.includes('w') ||
+        (options.startPosition.horizontalEmu === undefined && widthPt !== startWidthPt)
           ? { horizontalEmu: pointsToEmu(previewX - options.anchorFrameOrigin.x) }
           : options.startPosition.horizontalEmu !== undefined
             ? { horizontalEmu: options.startPosition.horizontalEmu }
             : {}),
-        ...(screenHandle.includes('n')
+        ...(screenHandle.includes('n') ||
+        (options.startPosition.verticalEmu === undefined && heightPt !== startHeightPt)
           ? { verticalEmu: pointsToEmu(previewY - options.anchorFrameOrigin.y) }
           : options.startPosition.verticalEmu !== undefined
             ? { verticalEmu: options.startPosition.verticalEmu }
@@ -348,6 +355,7 @@ export function finalizeImageOverlayInteraction(options: {
   readonly accumulatedScrollPt: number;
   readonly aspectLocked: boolean;
   readonly shiftKey: boolean;
+  readonly textbox?: boolean;
   readonly anchorFrameOrigin: AnchorFrameOrigin | null;
 }): FinalizedImageOverlayInteraction {
   if (options.session.mode === 'move') {
@@ -356,7 +364,17 @@ export function finalizeImageOverlayInteraction(options: {
     const position =
       options.session.startPosition &&
       computeMovedImagePosition(
-        options.session.startPosition,
+        options.session.startPosition.mode === 'frame' && options.anchorFrameOrigin
+          ? {
+              ...options.session.startPosition,
+              horizontalEmu:
+                options.session.startPosition.horizontalEmu ??
+                pointsToEmu(options.session.startBounds.x - options.anchorFrameOrigin.x),
+              verticalEmu:
+                options.session.startPosition.verticalEmu ??
+                pointsToEmu(options.session.startBounds.y - options.anchorFrameOrigin.y),
+            }
+          : options.session.startPosition,
         options.deltaXPt,
         options.deltaYPt + options.accumulatedScrollPt
       );
@@ -393,7 +411,8 @@ export function finalizeImageOverlayInteraction(options: {
     preserveAspect: resizePreservesAspect(
       options.session.handle,
       options.aspectLocked,
-      options.shiftKey
+      options.shiftKey,
+      options.textbox
     ),
     kind: options.session.kind,
   });

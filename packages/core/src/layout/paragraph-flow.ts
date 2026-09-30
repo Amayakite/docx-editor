@@ -38,7 +38,7 @@ import {
   type OoxmlProperty,
 } from '@docx-editor.dev/core/store';
 import {
-  propertiesOfRunContainer,
+  propertiesOfRunContainer as propertiesOf,
   type FieldAwarePiece,
   type FieldPageContext,
   type FieldLinkProjector,
@@ -254,9 +254,7 @@ export interface ParagraphFlowOptions {
   readonly paragraphMarkIsCellEnd?: boolean;
 }
 
-export function propertiesOf(container: OoxmlNode | undefined): OoxmlProperty[] {
-  return propertiesOfRunContainer(container);
-}
+export { propertiesOf };
 
 import {
   measureFollowingTabSegment,
@@ -632,6 +630,7 @@ export function breakParagraph(
     applyNarrowWrapSkipIfNeeded,
     applyInlineObjectSkipIfNeeded,
     finalizeTopAndBottomClearance,
+    clearEmptyParagraph,
   } = createLineExclusionClearance({
     line: () => line,
     top: currentLineTopY,
@@ -639,6 +638,7 @@ export function breakParagraph(
     zones: activeExclusionZones,
     left: () => Math.max(contentLeft, lineOrigin()),
     right: wrapRight,
+    clearOwnEmptyAnchor: flow?.anchorCellBox == null,
     emptyStyle: lineStartStyle,
     measurer,
     lineSpacing,
@@ -990,6 +990,8 @@ export function breakParagraph(
         ? Math.max(0, spaced.trailing ?? spaced.height - naturalHeight)
         : 0;
     finalizeTopAndBottomClearance();
+    if (empty && (wrapAnchorStarts.size > 0 || topAndBottomAnchorStarts.size > 0))
+      clearEmptyParagraph(paragraphId);
     // Mark wrap advances after merging, using the shape paint receives.
     coalesceIdeographicSpans(line);
     markPendingLineWrapAdvances(line);

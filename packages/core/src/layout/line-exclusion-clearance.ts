@@ -89,6 +89,8 @@ export function createLineExclusionClearance(context: {
   zones: () => readonly ExclusionZone[];
   left: () => number;
   right: number;
+  /** Intrinsically sized cell stories reserve their own floating content separately. */
+  clearOwnEmptyAnchor?: boolean;
   emptyStyle: ResolvedRunStyle;
   measurer: TextMeasurer;
   lineSpacing: ParagraphLineSpacing;
@@ -184,7 +186,62 @@ export function createLineExclusionClearance(context: {
     if (skip > 0.001) line.exclusionSkipBefore = skip;
     else delete (line as { exclusionSkipBefore?: number }).exclusionSkipBefore;
   };
+  const clearEmptyParagraph = (paragraphId: string): void => {
+    // An anchor-only paragraph needs a passage for its floating objects' attachment.
+    // Its own rectangles clear the mark too, but only inherited clearance moves their origin.
+    const line = context.line();
+    if (context.holdsContent()) return;
+    const zones = context.zones();
+    const top = context.top() + (line.exclusionSkipBefore ?? 0);
+    const width = context.measurer.measure('¶', context.emptyStyle);
+    let inherited = narrowRectangularWrapSkip(
+      top,
+      line.height,
+      zones.filter((zone) => zone.anchorParagraphId !== paragraphId),
+      context.left(),
+      context.right,
+      width
+    );
+    const skip = narrowRectangularWrapSkip(
+      top,
+      line.height,
+      context.clearOwnEmptyAnchor === false
+        ? zones.filter((zone) => zone.anchorParagraphId !== paragraphId)
+        : zones,
+      context.left(),
+      context.right,
+      width
+    );
+    if (skip > 0.001) {
+      const ownEnd =
+        top +
+        inherited +
+        narrowRectangularWrapSkip(
+          top + inherited,
+          line.height,
+          zones.filter((zone) => zone.anchorParagraphId === paragraphId),
+          context.left(),
+          context.right,
+          width
+        );
+      // Clearing an own band cannot jump through an earlier paragraph's blocking band.
+      if (
+        narrowRectangularWrapSkip(
+          ownEnd,
+          line.height,
+          zones.filter((zone) => zone.anchorParagraphId !== paragraphId),
+          context.left(),
+          context.right,
+          width
+        ) > 0.001
+      )
+        inherited = skip;
+      line.exclusionSkipBefore = (line.exclusionSkipBefore ?? 0) + skip;
+      line.anchorClearanceBefore = inherited;
+    }
+  };
   return {
+    clearEmptyParagraph,
     applyTopAndBottomSkipIfNeeded,
     applyNarrowWrapSkipIfNeeded,
     applyInlineObjectSkipIfNeeded,
